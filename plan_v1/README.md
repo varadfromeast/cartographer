@@ -1,5 +1,12 @@
 # Cartographer v1 Plan — Instagram Manual Teach to CLI Emitter
 
+> Historical design note. This file describes the original manual-teach plan.
+> The current Cartographer direction is documented in `architecture.md`,
+> `agent-handoff.md`, `ubiquitous_language.md`, and
+> `packages/cartographer/EXTERNAL_AGENT.md`. Current state: Instagram has zero
+> acquired commands; live fallback should go through `cg use` / `cg shell`, or
+> `cg pw` for one-off non-interactive commands.
+
 ## Goal
 
 Build the narrow v1 tracer bullet for Cartographer on top of this Stagehand
@@ -171,14 +178,10 @@ type ProcessTape = {
 };
 ```
 
-Initial hand-authored process names:
+Historical example process names:
 
-- `open_profile`
-- `open_recent_post`
-- `open_messages`
-- `send_dm`
-- `follow_profile`
-- `message_profile_after_follow`
+- `<read_process>`
+- `<write_process>`
 
 ## Recording Strategy
 
@@ -263,11 +266,11 @@ For write operations, the emitted CLI should default to dry-run unless passed:
 --confirm-write
 ```
 
-For `send_dm`, require the message as an argument and echo a final confirmation
-before the Stagehand action is performed:
+For a write command, require write arguments and echo a final confirmation
+before the browser action is performed:
 
 ```text
-instagram-com-cli send-dm --recipient alice --message "..." --confirm-write
+instagram-com-cli <write-command> --message "..." --confirm-write
 ```
 
 ## Structural Action Cache
@@ -327,12 +330,8 @@ Output:
 Generated commands:
 
 ```text
-instagram-com-cli open-profile
-instagram-com-cli open-recent-post --index 1
-instagram-com-cli open-messages
-instagram-com-cli send-dm --recipient <handle> --message <text> --confirm-write
-instagram-com-cli follow-profile --handle <handle> --confirm-write
-instagram-com-cli message-profile-after-follow --handle <handle> --message <text> --confirm-write
+instagram-com-cli <read-command>
+instagram-com-cli <write-command> --confirm-write
 ```
 
 The first emitted CLI can be a Node script using Commander. It should import the
@@ -403,7 +402,7 @@ recorded entry checkpoint.
 - Generate Commander subcommands from hand-authored process tapes.
 - Bundle or write a runnable Node script.
 
-Exit criterion: `instagram-com-cli open-messages` loads a process tape and
+Exit criterion: `instagram-com-cli <read-command>` loads a process tape and
 replays it.
 
 ### M7 — Instagram Write Flow Validation

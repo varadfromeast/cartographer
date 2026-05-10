@@ -1,5 +1,10 @@
 # Cartographer v1 Interfaces
 
+> Historical design note. These interfaces predate the current task shell,
+> task-scoped Playwright CLI fallback, task review, and typed
+> `apply-promotion-decision` flow. Use the current docs at repo root and under
+> `packages/cartographer/` for implementation work.
+
 This document defines the v1 contracts before implementation. The goal is that
 the code reads like the domain:
 
@@ -28,11 +33,8 @@ cartographer record-step <step-name>
 cartographer name-process <process-name> --steps <step-id...>
 cartographer emit-cli instagram.com
 
-instagram-com-cli open-profile
-instagram-com-cli open-recent-post --index 1
-instagram-com-cli open-messages
-instagram-com-cli send-dm --message <text> --confirm-write
-instagram-com-cli follow-profile --confirm-write
+instagram-com-cli <read-command>
+instagram-com-cli <write-command> --confirm-write
 instagram-com-cli message-profile-after-follow --message <text> --confirm-write
 ```
 
@@ -210,7 +212,10 @@ export interface ManualRecorder {
   snapshot(label: string): Promise<State>;
   observe(instruction: string): Promise<ObservedCandidate[]>;
   act(candidateId: string, args?: RuntimeArgs): Promise<ActOutcome>;
-  recordLastStep(stepName: string, options?: RecordStepOptions): Promise<TapeStep>;
+  recordLastStep(
+    stepName: string,
+    options?: RecordStepOptions,
+  ): Promise<TapeStep>;
   nameProcess(input: NameProcessInput): Promise<ProcessTape>;
   save(): Promise<TapeCatalog>;
 }

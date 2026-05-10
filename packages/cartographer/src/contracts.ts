@@ -7,6 +7,13 @@ export type StepId = string;
 export type ProcessName = string;
 export type FallbackTapeId = string;
 export type PromotionProposalId = string;
+export type TaskId = string;
+export type TaskSegmentId = string;
+
+export interface InterruptHandler {
+  name: string;
+  dismissSelector: string;
+}
 
 export type StateKind =
   | "page"
@@ -21,7 +28,24 @@ export type OpType = "click" | "fill" | "submit" | "navigate";
 export type StepStatus = "recorded" | "replayed" | "self_healed" | "drifted";
 export type EvidenceKind = "screenshot" | "text";
 export type FallbackStatus = "succeeded" | "failed" | "rejected";
-export type FallbackOperationKind = "goto" | "click" | "fill" | "text" | "screenshot" | "record_step";
+export type FallbackOperationKind =
+  | "open"
+  | "goto"
+  | "snapshot"
+  | "click"
+  | "dblclick"
+  | "hover"
+  | "fill"
+  | "type"
+  | "press"
+  | "wait"
+  | "eval"
+  | "generate_locator"
+  | "text"
+  | "screenshot"
+  | "record_step"
+  | "run_code"
+  | "cli";
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface CartographerLogger {
@@ -84,7 +108,7 @@ export interface TapeStep {
 
 export interface SelectorDiagnosticCandidate {
   selector: string;
-  selectorKind: "xpath" | "css" | "url";
+  selectorKind: "xpath" | "css" | "url" | "playwright";
   stability: "strong" | "medium" | "weak";
   reason: string;
   matchCount?: number;
@@ -112,7 +136,12 @@ export type Postcondition = StepValidator;
 
 export interface FallbackTape {
   id: FallbackTapeId;
+  sourceFallbackTapeId?: FallbackTapeId;
+  sourceOperationIndexes?: number[];
   domain: Domain;
+  taskId?: TaskId;
+  taskSegmentId?: TaskSegmentId;
+  taskSegmentPath?: string;
   intent: string;
   sessionId?: string;
   source: "playwright_fallback" | "stagehand_fallback" | "imported_process";
@@ -136,20 +165,71 @@ export interface FallbackOperation {
   id: string;
   kind: FallbackOperationKind;
   instruction: string;
+  surface?: "fallback" | "cli";
+  promotionEligible?: boolean;
   urlBefore?: string;
   urlAfter?: string;
   selector?: string;
-  selectorKind?: "xpath" | "css" | "url" | "unknown";
+  selectorKind?: "xpath" | "css" | "url" | "playwright" | "unknown";
+  selectorCandidates?: SelectorDiagnosticCandidate[];
   valuePlaceholder?: string;
   evidencePath?: string;
+  evidencePaths?: Record<string, string>;
+  evidenceSummaryPath?: string;
+  evidenceSummary?: PlaywrightCliEvidenceSummary;
   stepId?: StepId;
+  command?: string;
+  commandArgs?: string[];
+  processName?: ProcessName;
+  success?: boolean;
+  failureReason?: string;
   writesToPlatform?: boolean;
   createdAt: string;
+}
+
+export interface PlaywrightCliEvidenceSummary {
+  schemaVersion: 1;
+  command: string;
+  args: string[];
+  success: boolean;
+  urlBefore?: string;
+  urlAfter?: string;
+  title?: string;
+  consoleSummary?: string;
+  target?: {
+    selectorArg?: string;
+    ref?: string;
+    role?: string;
+    name?: string;
+    href?: string;
+  };
+  counts: {
+    refs: number;
+    links: number;
+    buttons: number;
+    textboxes: number;
+    snapshots: number;
+  };
+  controls: SnapshotControlSummary[];
+  selectorCandidates: SelectorDiagnosticCandidate[];
+  warnings: string[];
+  preview: string[];
+  createdAt: string;
+}
+
+export interface SnapshotControlSummary {
+  ref: string;
+  role: string;
+  name?: string;
+  href?: string;
 }
 
 export interface FallbackReviewPacket {
   id: FallbackTapeId;
   domain: Domain;
+  taskId?: TaskId;
+  taskSegmentId?: TaskSegmentId;
+  taskSegmentPath?: string;
   intent: string;
   status: FallbackStatus;
   stepCount: number;
@@ -161,9 +241,96 @@ export interface FallbackReviewPacket {
   reviewRequestPath?: string;
   decisionSchemaPath?: string;
   decisionTemplatePath?: string;
-  promoteCommand: string;
-  rejectCommand: string;
+  createReviewCommand: string;
   applyDecisionCommand?: string;
+}
+
+export type TaskFileStatus =
+  | "open"
+  | "recording"
+  | "review_required"
+  | "decision_required"
+  | "decision_applied"
+  | "closed";
+export type TaskReviewStatus = "created" | "applied" | "stale";
+export type TaskSegmentStatus =
+  | "recording"
+  | "saved"
+  | "abandoned"
+  | "promoted"
+  | "rejected"
+  | "deleted";
+
+export interface TaskSegmentReference {
+  segmentId: TaskSegmentId;
+  segmentPath: string;
+  intent: string;
+  status: TaskSegmentStatus;
+  fallbackTapeId?: FallbackTapeId;
+  reviewPath?: string;
+  abandonedReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskFile {
+  schemaVersion: 1;
+  taskId: TaskId;
+  domain: Domain;
+  intent: string;
+  status: TaskFileStatus;
+  taskPath: string;
+  taskMarkdownPath: string;
+  review?: TaskReviewState;
+  segments: TaskSegmentReference[];
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  completionKind?: "normal" | "no_acquisition";
+  completionReason?: string;
+}
+
+export interface TaskReviewState {
+  reviewId: string;
+  status: TaskReviewStatus;
+  reviewPath: string;
+  reviewRequestPath: string;
+  decisionSchemaPath: string;
+  decisionTemplatePath: string;
+  coversFallbackTapeIds: FallbackTapeId[];
+  createdAt: string;
+  appliedAt?: string;
+  staleAt?: string;
+}
+
+export interface TaskLifecycleGateResult {
+  allowed: boolean;
+  requiredAction?: string;
+  reason?: string;
+  command?: string;
+}
+
+export interface TaskSegmentFile {
+  schemaVersion: 1;
+  taskId: TaskId;
+  segmentId: TaskSegmentId;
+  domain: Domain;
+  intent: string;
+  status: TaskSegmentStatus;
+  surface: "fallback";
+  segmentPath: string;
+  segmentMarkdownPath: string;
+  eventJournalPath?: string;
+  fallbackTapeId?: FallbackTapeId;
+  fallbackTapePath?: string;
+  reviewPath?: string;
+  reviewRequestPath?: string;
+  decisionSchemaPath?: string;
+  decisionTemplatePath?: string;
+  abandonedReason?: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
 }
 
 export interface FallbackPromotionSummary {
@@ -187,6 +354,22 @@ export interface FallbackPromotionSummary {
   mechanicalHints: MechanicalPromotionHints;
 }
 
+export interface DuplicateCandidate {
+  processName: ProcessName;
+  description: string;
+  writesToPlatform: boolean;
+  args: ProcessArg[];
+  outputs: ProcessOutput[];
+  postconditions: Postcondition[];
+  reasons: string[];
+}
+
+export interface DuplicateJudgment {
+  checked: true;
+  duplicateOf: ProcessName | null;
+  reasoning: string;
+}
+
 export interface FallbackStepSummary {
   id: StepId;
   name: string;
@@ -204,7 +387,7 @@ export interface FallbackStepSummary {
 export interface FallbackActionSummary {
   method?: string;
   selector: string;
-  selectorKind: "xpath" | "css" | "url" | "unknown";
+  selectorKind: "xpath" | "css" | "url" | "playwright" | "unknown";
   arguments: string[];
 }
 
@@ -232,6 +415,7 @@ export interface PromotionProposal {
   description?: string;
   args?: ProcessArg[];
   outputs?: ProcessOutput[];
+  stateScope?: CommandStateScope;
   postconditions?: Postcondition[];
   writesToPlatform?: boolean;
   reason: string;
@@ -245,7 +429,11 @@ export interface FallbackTapeStore {
   list(domain: Domain): Promise<FallbackTape[]>;
   load(domain: Domain, id: FallbackTapeId): Promise<FallbackTape | null>;
   save(tape: FallbackTape): Promise<void>;
-  markPromoted(domain: Domain, id: FallbackTapeId, processName: ProcessName): Promise<void>;
+  markPromoted(
+    domain: Domain,
+    id: FallbackTapeId,
+    processName: ProcessName,
+  ): Promise<void>;
   reject(domain: Domain, id: FallbackTapeId, reason: string): Promise<void>;
   delete(domain: Domain, id: FallbackTapeId): Promise<void>;
 }
@@ -266,14 +454,24 @@ export interface ProcessTape {
   name: ProcessName;
   description: string;
   domain: Domain;
+  promotionSource?: ProcessPromotionSource;
   entry: State;
   steps: TapeStep[];
   args: ProcessArg[];
   outputs?: ProcessOutput[];
+  stateScope?: CommandStateScope;
   postconditions?: Postcondition[];
   writesToPlatform: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProcessPromotionSource {
+  fallbackTapeId: FallbackTapeId;
+  sourceFallbackTapeId?: FallbackTapeId;
+  operationIndexes?: number[];
+  operationIds?: string[];
+  source: FallbackTape["source"];
 }
 
 export interface TapeCatalog {
@@ -290,8 +488,39 @@ export interface ProcessTapeSummary {
   writesToPlatform: boolean;
   args: ProcessArg[];
   outputs?: ProcessOutput[];
+  stateScope?: CommandStateScope;
   postconditions?: Postcondition[];
   updatedAt: string;
+}
+
+export interface CommandStateScope {
+  preconditions?: Postcondition[];
+  postconditions?: Postcondition[];
+  autoEnterProcessName?: ProcessName;
+  onUnmetPrecondition: "suggest_chain" | "fallback";
+}
+
+export interface SkillChainPlanStep {
+  processName: ProcessName;
+  reason: string;
+  source: "precondition" | "target";
+}
+
+export interface SkillChainPlan {
+  success: boolean;
+  domain: Domain;
+  targetProcessName: ProcessName;
+  steps: SkillChainPlanStep[];
+  fallbackRecommended: boolean;
+  reason: string;
+}
+
+export interface StateScopedSkillPlanner {
+  plan(input: {
+    domain: Domain;
+    targetProcessName: ProcessName;
+    catalog: TapeCatalog;
+  }): SkillChainPlan;
 }
 
 export type RuntimeArgs = Record<string, string | number | boolean>;
@@ -305,13 +534,18 @@ export interface BrowserSession {
   actRaw(action: Action, args?: RuntimeArgs): Promise<ActOutcome>;
   exists(selector: string): Promise<boolean>;
   readText(selector?: string): Promise<string>;
+  isVisible(selector: string): Promise<boolean>;
+  isEnabled(selector: string): Promise<boolean>;
+  scrollIntoView(selector: string): Promise<void>;
+  wait(milliseconds: number): Promise<void>;
+  waitForSettle(): Promise<void>;
   screenshot(label: string): Promise<string>;
   waitForUser(label: string): Promise<void>;
   close(): Promise<void>;
 }
 
 export interface BrowserSessionFactory {
-  launchInstagram(options: LaunchOptions): Promise<BrowserSession>;
+  launch(domain: Domain, options: LaunchOptions): Promise<BrowserSession>;
 }
 
 export interface LaunchOptions {
@@ -319,6 +553,7 @@ export interface LaunchOptions {
   cacheDir: string;
   headless: boolean;
   viewport: { width: number; height: number };
+  taskId?: TaskId;
 }
 
 export interface ObservedCandidate {
@@ -353,7 +588,10 @@ export interface ManualRecorder {
   snapshot(label: string): Promise<State>;
   observe(instruction: string): Promise<ObservedCandidate[]>;
   act(candidateId: string, args?: RuntimeArgs): Promise<ActOutcome>;
-  recordLastStep(stepName: string, options?: RecordStepOptions): Promise<TapeStep>;
+  recordLastStep(
+    stepName: string,
+    options?: RecordStepOptions,
+  ): Promise<TapeStep>;
   nameProcess(input: NameProcessInput): Promise<ProcessTape>;
   save(): Promise<TapeCatalog>;
 }
@@ -458,14 +696,14 @@ export interface LocateElementInput {
 
 export interface LocatedElement {
   selector: string;
-  selectorKind: "xpath" | "css" | "url";
+  selectorKind: "xpath" | "css" | "url" | "playwright";
   description: string;
   alternatives?: SelectorCandidate[];
 }
 
 export interface SelectorCandidate {
   selector: string;
-  selectorKind: "xpath" | "css";
+  selectorKind: "xpath" | "css" | "playwright";
   stability: "strong" | "medium" | "weak";
   reason: string;
   matchCount?: number;
@@ -490,7 +728,10 @@ export interface ValidationCheck {
 }
 
 export interface ReplayValidator {
-  validate(session: BrowserSession, validators?: StepValidator[]): Promise<ValidationResult>;
+  validate(
+    session: BrowserSession,
+    validators?: StepValidator[],
+  ): Promise<ValidationResult>;
 }
 
 export interface EvidenceStore {
@@ -534,8 +775,10 @@ export interface PromotionPolicyInput {
   commandName: ProcessName;
   description: string;
   outputs?: ProcessOutput[];
+  stateScope?: CommandStateScope;
   postconditions?: Postcondition[];
-  existingProcessNames: ProcessName[];
+  existingProcesses: ProcessTapeSummary[];
+  duplicateJudgment?: DuplicateJudgment;
 }
 
 export interface PromotionPolicyDecision {
@@ -556,26 +799,54 @@ export type PromotionDecision =
   | {
       action: "promote";
       fallbackTapeId: FallbackTapeId;
+      reviewItemId?: string;
       reasoning: string;
       confidence: PromotionDecisionConfidence;
+      duplicateJudgment?: DuplicateJudgment;
+      candidateSliceId?: string;
+      operationIndexes?: number[];
+      args?: ProcessArg[];
+      valueBindings?: OperationValueBinding[];
       commandName: ProcessName;
       description: string;
+      stateScope?: CommandStateScope;
       postconditions: Postcondition[];
       outputs?: ProcessOutput[];
     }
   | {
       action: "reject";
       fallbackTapeId: FallbackTapeId;
+      reviewItemId?: string;
+      candidateSliceId?: string;
+      operationIndexes?: number[];
       reasoning: string;
       confidence: PromotionDecisionConfidence;
+      duplicateJudgment?: DuplicateJudgment;
       rejectReason: string;
     }
   | {
       action: "delete";
       fallbackTapeId: FallbackTapeId;
+      reviewItemId?: string;
       reasoning: string;
       confidence: PromotionDecisionConfidence;
     };
+
+export interface OperationValueBinding {
+  operationIndex: number;
+  argName: string;
+  target?: "argument" | "selector";
+}
+
+export interface PromotionBatchDecision {
+  action: "review_batch";
+  taskId: TaskId;
+  reasoning: string;
+  confidence: PromotionDecisionConfidence;
+  decisions: PromotionDecision[];
+}
+
+export type PromotionDecisionFile = PromotionDecision | PromotionBatchDecision;
 
 export interface PromotionDecisionSchema {
   schemaVersion: 1;
@@ -593,6 +864,7 @@ export interface PromotionReviewRequest {
   reviewPacket: FallbackReviewPacket;
   fallbackSummary: FallbackPromotionSummary;
   existingCommands: ProcessTapeSummary[];
+  duplicateCandidates: DuplicateCandidate[];
   policy: {
     name: "v1";
     hardRules: string[];
@@ -610,8 +882,82 @@ export interface PromotionReviewArtifacts {
   decisionTemplate: PromotionDecision;
 }
 
+export interface TaskPromotionReviewArtifacts {
+  reviewPath: string;
+  reviewRequestPath: string;
+  decisionSchemaPath: string;
+  decisionTemplatePath: string;
+  request: TaskPromotionReviewRequest;
+  decisionSchema: PromotionDecisionSchema;
+  decisionTemplate: PromotionBatchDecision;
+}
+
+export interface CandidateOperationSlice {
+  id: string;
+  reviewItemId: string;
+  kind: CandidateOperationSliceKind;
+  fallbackTapeId: FallbackTapeId;
+  operationIndexes: number[];
+  mechanicalReason: string;
+  suggestedCommandName?: ProcessName;
+  suggestedDescription?: string;
+  suggestedArgs?: ProcessArg[];
+  suggestedValueBindings?: OperationValueBinding[];
+  suggestedPostconditions?: Postcondition[];
+  suggestedStateScope?: CommandStateScope;
+  suggestedOutputs?: ProcessOutput[];
+  riskFlags?: string[];
+}
+
+export type CandidateOperationSliceKind =
+  | "navigation"
+  | "open_and_read"
+  | "state_transition"
+  | "write_and_verify"
+  | "read"
+  | "primitive"
+  | "misc";
+
+export interface IndexedFallbackOperation extends FallbackOperation {
+  operationIndex: number;
+}
+
+export interface TaskFallbackReviewItem {
+  fallbackTapeId: FallbackTapeId;
+  taskSegmentId?: TaskSegmentId;
+  taskSegmentPath?: string;
+  intent: string;
+  status: FallbackStatus;
+  writesToPlatform: boolean;
+  args: ProcessArg[];
+  operations: IndexedFallbackOperation[];
+  candidateSlices: CandidateOperationSlice[];
+  reviewRequestPath?: string;
+  reviewPath?: string;
+  duplicateCandidates: DuplicateCandidate[];
+  riskFlags: string[];
+}
+
+export interface TaskPromotionReviewRequest {
+  schemaVersion: 1;
+  domain: Domain;
+  taskId: TaskId;
+  prompt: string;
+  decisionSchemaPath: string;
+  decisionTemplatePath: string;
+  reviewRequestPath: string;
+  reviewPath: string;
+  existingCommands: ProcessTapeSummary[];
+  fallbacks: TaskFallbackReviewItem[];
+  policy: {
+    name: "v1";
+    hardRules: string[];
+    advisoryRules: string[];
+  };
+}
+
 export interface PromotionDecisionApplyResult {
-  decision: PromotionDecision;
+  decision: PromotionDecisionFile;
   agentContractDelta?: AgentContractDelta;
   result:
     | { action: "promote"; promotion: PromotionResult }
@@ -620,14 +966,19 @@ export interface PromotionDecisionApplyResult {
 }
 
 export interface PromotionDecisionApplier {
-  apply(domain: Domain, decision: PromotionDecision): Promise<PromotionDecisionApplyResult>;
+  apply(
+    domain: Domain,
+    decision: PromotionDecision,
+  ): Promise<PromotionDecisionApplyResult>;
 }
 
 export interface PromotionOptions {
   commandName: ProcessName;
   description: string;
   outputs?: ProcessOutput[];
+  stateScope?: CommandStateScope;
   postconditions?: Postcondition[];
+  duplicateJudgment?: DuplicateJudgment;
 }
 
 export interface ReusableCommandReference {
@@ -662,6 +1013,7 @@ export interface PromotionResult {
   reusableCommand: ReusableCommandReference;
   agentContractDelta: AgentContractDelta;
   policy: PromotionPolicyDecision;
+  replay: PromotionReplayResult;
   emittedCli: CliEmitterResult;
   emittedSkillPath: string;
   emittedManifestPath?: string;
@@ -669,36 +1021,36 @@ export interface PromotionResult {
   exposedManifestPath?: string;
 }
 
-export interface SkillPromoter {
-  promote(domain: Domain, fallbackTapeId: FallbackTapeId, options: PromotionOptions): Promise<PromotionResult>;
+export interface PromotionReplayResult {
+  status: "passed" | "skipped";
+  reason: string;
+  processName: ProcessName;
+  taskId?: TaskId;
+  postconditionsPassed?: boolean;
+  executedStepCount?: number;
 }
 
-export type EndOfTaskDecision =
-  | {
-      action: "promote";
-      fallbackTapeId: FallbackTapeId;
-      commandName: ProcessName;
-      description: string;
-      outputs?: ProcessOutput[];
-      postconditions?: Postcondition[];
-    }
-  | { action: "reject"; fallbackTapeId: FallbackTapeId; reason: string }
-  | { action: "delete"; fallbackTapeId: FallbackTapeId };
+export interface SkillPromoter {
+  promote(
+    domain: Domain,
+    fallbackTapeId: FallbackTapeId,
+    options: PromotionOptions,
+  ): Promise<PromotionResult>;
+}
 
 export interface EndOfTaskReviewInput {
   domain: Domain;
   taskStartedAt?: string;
-  decisions?: EndOfTaskDecision[];
 }
 
 export interface EndOfTaskReviewResult {
   review: FallbackReviewResult;
-  appliedDecisions: EndOfTaskDecision[];
-  promotions: PromotionResult[];
 }
 
 export interface EndOfTaskReviewer {
-  reviewCompletedTask(input: EndOfTaskReviewInput): Promise<EndOfTaskReviewResult>;
+  reviewCompletedTask(
+    input: EndOfTaskReviewInput,
+  ): Promise<EndOfTaskReviewResult>;
 }
 
 export interface CartographerRuntime {
@@ -709,6 +1061,7 @@ export interface RunProcessInput {
   domain: Domain;
   processName: ProcessName;
   args?: RuntimeArgs;
+  taskId?: TaskId;
   confirmWrite: boolean;
   dryRun: boolean;
 }
@@ -720,9 +1073,12 @@ export interface RunProcessResult {
   driftedStepIds: StepId[];
   outputs?: Record<string, string>;
   execution?: RunExecutionResult;
+  preconditions?: PostconditionResult;
   postconditions?: PostconditionResult;
   drift?: DriftReport;
   failure?: RunFailure;
+  suggestedAutoEnterProcessName?: ProcessName;
+  fallbackRecommended?: boolean;
   message: string;
 }
 
@@ -739,6 +1095,7 @@ export interface ActionFailure {
   method?: string;
   selector: string;
   message: string;
+  diagnosticScreenshotPath?: string;
 }
 
 export interface PostconditionResult {
@@ -765,6 +1122,7 @@ export interface DriftStepReport {
 
 export type RunFailure =
   | { kind: "action_failed"; reason: string }
+  | { kind: "precondition_failed"; reason: string }
   | { kind: "postcondition_failed"; reason: string }
   | { kind: "missing_args"; reason: string }
   | { kind: "write_confirmation_required"; reason: string }

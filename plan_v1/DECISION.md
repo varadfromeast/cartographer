@@ -1,5 +1,10 @@
 # Decision — Narrow v1 to CLI Emitter
 
+> Historical design note. The current implementation keeps the CLI-emitter
+> principle, but acquisition now runs through task-scoped Playwright CLI
+> fallback, compact task review, and `apply-promotion-decision`. The current
+> Instagram catalog is intentionally empty after cleanup.
+
 ## Decision
 
 For v1, Cartographer should **not** be graph-first.
@@ -95,13 +100,13 @@ The first success is not a graph.
 The first success is:
 
 ```text
-instagram-com-cli open-messages
+instagram-com-cli <read-command>
 ```
 
 or:
 
 ```text
-instagram-com-cli send-test-dm --message "testing this" --confirm-write
+instagram-com-cli <write-command> --confirm-write
 ```
 
 loading a taught process and replaying it through Stagehand without needing a

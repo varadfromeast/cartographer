@@ -1,0 +1,37 @@
+{
+  "action": "promote",
+  "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+  "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:write_and_verify-27",
+  "candidateSliceId": "write_and_verify-27",
+  "operationIndexes": [33, 36, 37],
+  "reasoning": "This is not a duplicate of the existing open-thread command: it fills the current DM composer, clicks Send, and verifies the sent message body.",
+  "confidence": "high",
+  "commandName": "send_message_in_current_thread",
+  "description": "Send a message in the currently open Instagram direct-message thread",
+  "args": [
+    {
+      "name": "message",
+      "required": true,
+      "description": "Message text to send"
+    }
+  ],
+  "valueBindings": [
+    {
+      "operationIndex": 33,
+      "argName": "message",
+      "target": "argument"
+    }
+  ],
+  "postconditions": [
+    {
+      "type": "text_contains",
+      "selector": "body",
+      "value": "%message%"
+    }
+  ],
+  "duplicateJudgment": {
+    "checked": true,
+    "duplicateOf": null,
+    "reasoning": "Existing open_thread_by_name opens a conversation only; this command performs the distinct write action of sending message text in the current thread."
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "action": "review_batch",
+  "taskId": "task-3b596c095643",
+  "reasoning": "Review all fallback tapes for this task. Decide every promotion-ready candidate slice independently; reject only the remaining whole fallback/noisy slices.",
+  "confidence": "medium",
+  "decisions": [
+    {
+      "action": "reject",
+      "fallbackTapeId": "ab3a1c2442e133e5580b85cc3b7ac54eb8822cf435163291048c74a2b6c85b68",
+      "reviewItemId": "ab3a1c2442e133e5580b85cc3b7ac54eb8822cf435163291048c74a2b6c85b68:fallback",
+      "reasoning": "Reject the remaining whole fallback after independently promoting or rejecting reusable candidate slices.",
+      "confidence": "medium",
+      "rejectReason": "Whole fallback is broader/noisier than the isolated reusable slices."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "2540ef02c81e0c065361ecded486cac073edda07c3ec50cd6be56d674f7eda6f",
+      "reviewItemId": "2540ef02c81e0c065361ecded486cac073edda07c3ec50cd6be56d674f7eda6f:fallback",
+      "reasoning": "Reject the remaining whole fallback after independently promoting or rejecting reusable candidate slices.",
+      "confidence": "medium",
+      "rejectReason": "Whole fallback is broader/noisier than the isolated reusable slices."
+    },
+    {
+      "action": "promote",
+      "fallbackTapeId": "3d4efdf10e9ff28f656fee336af9f24509f898311b200f2b5f17fa6c47930669",
+      "reviewItemId": "3d4efdf10e9ff28f656fee336af9f24509f898311b200f2b5f17fa6c47930669:state_transition-01",
+      "candidateSliceId": "state_transition-01",
+      "operationIndexes": [
+        0
+      ],
+      "reasoning": "Promotion-ready candidate slice. Verify this slice is reusable independently of noisy sibling operations before applying.",
+      "confidence": "medium",
+      "commandName": "open_thread_by_name",
+      "description": "Open an Instagram direct-message thread from the inbox by visible thread name",
+      "args": [
+        {
+          "name": "threadName",
+          "required": true,
+          "description": "visible thread name in the inbox"
+        }
+      ],
+      "valueBindings": [
+        {
+          "operationIndex": 0,
+          "argName": "threadName",
+          "target": "selector"
+        }
+      ],
+      "stateScope": {
+        "preconditions": [
+          {
+            "type": "url_contains",
+            "value": "/direct/inbox"
+          }
+        ],
+        "autoEnterProcessName": "open_inbox",
+        "onUnmetPrecondition": "fallback"
+      },
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/direct/t/"
+        }
+      ]
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "3d4efdf10e9ff28f656fee336af9f24509f898311b200f2b5f17fa6c47930669",
+      "reviewItemId": "3d4efdf10e9ff28f656fee336af9f24509f898311b200f2b5f17fa6c47930669:fallback",
+      "reasoning": "Reject the remaining whole fallback after independently promoting or rejecting reusable candidate slices.",
+      "confidence": "medium",
+      "rejectReason": "Whole fallback is broader/noisier than the isolated reusable slices."
+    }
+  ]
+}

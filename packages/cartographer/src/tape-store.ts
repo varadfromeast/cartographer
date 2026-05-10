@@ -8,7 +8,13 @@ import type {
   TapeCatalog,
   TapeStore,
 } from "./contracts.js";
-import { catalogPath, processTapePath, skillProcessPath, skillReadmePath, tapeDir } from "./paths.js";
+import {
+  catalogPath,
+  processTapePath,
+  skillProcessPath,
+  skillReadmePath,
+  tapeDir,
+} from "./paths.js";
 import { ensureDir, readJsonFile, writeJsonFile } from "./fs-json.js";
 
 export class JsonTapeStore implements TapeStore {
@@ -16,7 +22,10 @@ export class JsonTapeStore implements TapeStore {
     return await readJsonFile<TapeCatalog>(catalogPath(domain));
   }
 
-  async loadProcess(domain: Domain, name: ProcessName): Promise<ProcessTape | null> {
+  async loadProcess(
+    domain: Domain,
+    name: ProcessName,
+  ): Promise<ProcessTape | null> {
     return await readJsonFile<ProcessTape>(processTapePath(domain, name));
   }
 
@@ -27,7 +36,10 @@ export class JsonTapeStore implements TapeStore {
   async saveProcess(process: ProcessTape): Promise<void> {
     await ensureDir(tapeDir(process.domain));
     await writeJsonFile(processTapePath(process.domain, process.name), process);
-    await writeJsonFile(skillProcessPath(process.domain, process.name), process);
+    await writeJsonFile(
+      skillProcessPath(process.domain, process.name),
+      process,
+    );
     await writeSkillReadme(process);
 
     const existing = await this.loadCatalog(process.domain);
@@ -51,6 +63,7 @@ function summarizeProcess(process: ProcessTape): ProcessTapeSummary {
     writesToPlatform: process.writesToPlatform,
     args: process.args,
     outputs: process.outputs,
+    stateScope: process.stateScope,
     postconditions: process.postconditions,
     updatedAt: process.updatedAt,
   };
@@ -69,13 +82,38 @@ async function writeSkillReadme(process: ProcessTape): Promise<void> {
   if (process.args.length) {
     lines.push("", "## Arguments", "");
     for (const arg of process.args) {
-      lines.push(`- \`${arg.name}\`: ${arg.description}${arg.required ? " (required)" : ""}`);
+      lines.push(
+        `- \`${arg.name}\`: ${arg.description}${arg.required ? " (required)" : ""}`,
+      );
     }
   }
   if (process.outputs?.length) {
     lines.push("", "## Outputs", "");
     for (const output of process.outputs) {
-      lines.push(`- \`${output.name}\`: ${output.description} from \`${output.selector}\``);
+      lines.push(
+        `- \`${output.name}\`: ${output.description} from \`${output.selector}\``,
+      );
+    }
+  }
+  if (process.stateScope?.preconditions?.length) {
+    lines.push("", "## State Scope", "");
+    for (const precondition of process.stateScope.preconditions) {
+      if (precondition.type === "selector_exists") {
+        lines.push(`- Requires selector: \`${precondition.selector}\``);
+      } else if (precondition.type === "text_contains") {
+        lines.push(
+          `- Requires text: \`${precondition.selector}\` includes \`${precondition.value}\``,
+        );
+      } else {
+        lines.push(
+          `- Requires ${precondition.type}: \`${precondition.value}\``,
+        );
+      }
+    }
+    if (process.stateScope.autoEnterProcessName) {
+      lines.push(
+        `- Auto-enter candidate: \`${process.stateScope.autoEnterProcessName}\``,
+      );
     }
   }
   if (process.postconditions?.length) {
@@ -84,7 +122,9 @@ async function writeSkillReadme(process: ProcessTape): Promise<void> {
       if (postcondition.type === "selector_exists") {
         lines.push(`- \`selector_exists\`: \`${postcondition.selector}\``);
       } else if (postcondition.type === "text_contains") {
-        lines.push(`- \`text_contains\`: \`${postcondition.selector}\` includes \`${postcondition.value}\``);
+        lines.push(
+          `- \`text_contains\`: \`${postcondition.selector}\` includes \`${postcondition.value}\``,
+        );
       } else {
         lines.push(`- \`${postcondition.type}\`: \`${postcondition.value}\``);
       }

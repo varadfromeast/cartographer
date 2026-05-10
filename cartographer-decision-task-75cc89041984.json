@@ -1,0 +1,209 @@
+{
+  "action": "review_batch",
+  "taskId": "task-75cc89041984",
+  "reasoning": "Promote only small reusable Instagram DM primitives from the fallback evidence. Reject homepage/search/profile navigations and broad task-specific browsing because they are noisy or encode private one-off targets.",
+  "confidence": "high",
+  "decisions": [
+    {
+      "action": "reject",
+      "fallbackTapeId": "110a9f33461c05b12b728a61e8a36097ef5b398c29f39c17e99a46c9d30e7fef",
+      "reviewItemId": "110a9f33461c05b12b728a61e8a36097ef5b398c29f39c17e99a46c9d30e7fef:navigation-01",
+      "candidateSliceId": "navigation-01",
+      "operationIndexes": [0],
+      "reasoning": "Opening the Instagram homepage is too generic to be useful as a site skill and the postcondition is weak.",
+      "confidence": "high",
+      "rejectReason": "Weak generic navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "110a9f33461c05b12b728a61e8a36097ef5b398c29f39c17e99a46c9d30e7fef",
+      "reviewItemId": "110a9f33461c05b12b728a61e8a36097ef5b398c29f39c17e99a46c9d30e7fef:fallback",
+      "reasoning": "The whole fallback only loaded and read the login page, which is not a reusable user workflow.",
+      "confidence": "high",
+      "rejectReason": "No independently valuable reusable workflow."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-01",
+      "candidateSliceId": "navigation-01",
+      "operationIndexes": [0],
+      "reasoning": "Opening the Instagram homepage is too generic and has only a weak URL postcondition.",
+      "confidence": "high",
+      "rejectReason": "Weak generic navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-02",
+      "candidateSliceId": "navigation-02",
+      "operationIndexes": [4],
+      "reasoning": "The recorded explore URL is tied to this task's keyword search and did not produce a reusable deterministic account-finding workflow.",
+      "confidence": "high",
+      "rejectReason": "Task-specific search navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-03",
+      "candidateSliceId": "navigation-03",
+      "operationIndexes": [12],
+      "reasoning": "The recorded explore URL is tied to this task's keyword search and did not produce a reusable deterministic account-finding workflow.",
+      "confidence": "high",
+      "rejectReason": "Task-specific search navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-04",
+      "candidateSliceId": "navigation-04",
+      "operationIndexes": [16],
+      "reasoning": "Opening a specific creator profile is private one-off evidence, not a general command.",
+      "confidence": "high",
+      "rejectReason": "One-off profile navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-05",
+      "candidateSliceId": "navigation-05",
+      "operationIndexes": [18],
+      "reasoning": "Opening a specific creator profile is private one-off evidence, not a general command.",
+      "confidence": "high",
+      "rejectReason": "One-off profile navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-06",
+      "candidateSliceId": "navigation-06",
+      "operationIndexes": [20],
+      "reasoning": "Opening a specific creator profile is private one-off evidence, not a general command.",
+      "confidence": "high",
+      "rejectReason": "One-off profile navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-07",
+      "candidateSliceId": "navigation-07",
+      "operationIndexes": [22],
+      "reasoning": "Opening a specific creator profile is private one-off evidence, not a general command.",
+      "confidence": "high",
+      "rejectReason": "One-off profile navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-08",
+      "candidateSliceId": "navigation-08",
+      "operationIndexes": [24],
+      "reasoning": "Opening a specific creator profile is private one-off evidence, not a general command.",
+      "confidence": "high",
+      "rejectReason": "One-off profile navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-09",
+      "candidateSliceId": "navigation-09",
+      "operationIndexes": [26],
+      "reasoning": "Opening a specific recipient profile is private one-off evidence, not a general command.",
+      "confidence": "high",
+      "rejectReason": "One-off profile navigation."
+    },
+    {
+      "action": "promote",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-10",
+      "candidateSliceId": "navigation-10",
+      "operationIndexes": [28],
+      "reasoning": "Opening the Instagram direct inbox is a reusable deterministic navigation step with a clear URL postcondition.",
+      "confidence": "high",
+      "commandName": "open_inbox",
+      "description": "Open Instagram direct messages inbox",
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/direct/inbox"
+        }
+      ]
+    },
+    {
+      "action": "promote",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:state_transition-11",
+      "candidateSliceId": "state_transition-11",
+      "operationIndexes": [30],
+      "reasoning": "Opening a DM thread from the inbox by visible title is reusable when parameterized by thread name.",
+      "confidence": "high",
+      "commandName": "open_thread_by_name",
+      "description": "Open an Instagram direct-message thread by visible thread name from the inbox",
+      "args": [
+        {
+          "name": "threadName",
+          "required": true,
+          "description": "Visible name of the direct-message thread to open"
+        }
+      ],
+      "valueBindings": [
+        {
+          "operationIndex": 30,
+          "argName": "threadName",
+          "target": "selector"
+        }
+      ],
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/direct/t/"
+        },
+        {
+          "type": "text_contains",
+          "selector": "body",
+          "value": "%threadName%"
+        }
+      ]
+    },
+    {
+      "action": "promote",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:write_and_verify-27",
+      "candidateSliceId": "write_and_verify-27",
+      "operationIndexes": [33, 36, 37],
+      "reasoning": "Filling the current DM textbox, clicking the Send button, and verifying the message text in the thread is a reusable write command when parameterized by message.",
+      "confidence": "high",
+      "commandName": "send_message_in_current_thread",
+      "description": "Send a message in the currently open Instagram direct-message thread",
+      "args": [
+        {
+          "name": "message",
+          "required": true,
+          "description": "Message text to send"
+        }
+      ],
+      "valueBindings": [
+        {
+          "operationIndex": 33,
+          "argName": "message",
+          "target": "argument"
+        }
+      ],
+      "postconditions": [
+        {
+          "type": "text_contains",
+          "selector": "body",
+          "value": "%message%"
+        }
+      ]
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:fallback",
+      "reasoning": "The full fallback includes login prompts, failed selectors, profile research, screenshots, and the task-specific recipient/message. Only the clean DM primitives should be promoted.",
+      "confidence": "high",
+      "rejectReason": "Whole fallback is noisy, private, and task-specific."
+    }
+  ]
+}

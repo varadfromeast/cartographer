@@ -14,11 +14,16 @@ import type {
   TapeStore,
 } from "./contracts.js";
 import { NodeCliEmitter } from "./cli-emitter.js";
-import { applyPromotion, createPromotionProposal } from "./promotion-reviewer.js";
+import {
+  applyPromotion,
+  createPromotionProposal,
+  processFromPromotionProposal,
+} from "./promotion-reviewer.js";
 import { V1PromotionPolicy } from "./promotion-policy.js";
 import { emitSkillManifest, emitSkillMd } from "./skill-emitter.js";
 import { binDir, slugifyName, tapeDir } from "./paths.js";
 import { ConsoleCartographerLogger } from "./logger.js";
+import { replayBeforePromotion } from "./promotion-replay.js";
 
 export class DefaultSkillPromoter implements SkillPromoter {
   constructor(
@@ -47,8 +52,10 @@ export class DefaultSkillPromoter implements SkillPromoter {
       commandName: options.commandName,
       description: options.description,
       outputs: options.outputs,
+      stateScope: options.stateScope,
       postconditions: options.postconditions,
-      existingProcessNames: Object.keys(catalog?.processes || {}),
+      existingProcesses: Object.values(catalog?.processes || {}),
+      duplicateJudgment: options.duplicateJudgment,
     });
     if (!policy.accepted) {
       const summary = policy.findings
@@ -62,10 +69,18 @@ export class DefaultSkillPromoter implements SkillPromoter {
       commandName: options.commandName,
       description: options.description,
       outputs: options.outputs,
+      stateScope: options.stateScope,
       postconditions: policy.effectivePostconditions,
       writesToPlatform: policy.writesToPlatform,
       existingProcessNames: Object.keys(catalog?.processes || {}),
       policyDecision: policy,
+    });
+    const processCandidate = processFromPromotionProposal(proposal, tape);
+    const replay = await replayBeforePromotion({
+      domain,
+      process: processCandidate,
+      taskId: tape.taskId,
+      logger: this.logger,
     });
     await this.promotionStore.save(proposal);
     const promotedProcess = await applyPromotion(
@@ -74,7 +89,11 @@ export class DefaultSkillPromoter implements SkillPromoter {
       this.tapeStore,
       this.promotionStore,
     );
-    await this.fallbackStore.markPromoted(domain, tape.id, promotedProcess.name);
+    await this.fallbackStore.markPromoted(
+      domain,
+      tape.id,
+      promotedProcess.name,
+    );
     const emittedCli = await new NodeCliEmitter().emit({
       domain,
       tapeDir: tapeDir(domain),
@@ -85,11 +104,25 @@ export class DefaultSkillPromoter implements SkillPromoter {
     const emittedManifestPath = await emitSkillManifest(domain);
     const exposedSkillPath = await emitSkillMd(
       domain,
-      path.resolve(process.cwd(), "packages", "cartographer", "skills", domain, "SKILL.md"),
+      path.resolve(
+        process.cwd(),
+        "packages",
+        "cartographer",
+        "skills",
+        domain,
+        "SKILL.md",
+      ),
     );
     const exposedManifestPath = await emitSkillManifest(
       domain,
-      path.resolve(process.cwd(), "packages", "cartographer", "skills", domain, "manifest.json"),
+      path.resolve(
+        process.cwd(),
+        "packages",
+        "cartographer",
+        "skills",
+        domain,
+        "manifest.json",
+      ),
     );
     const cliCommandName = slugifyName(promotedProcess.name);
     const argPattern = promotedProcess.args
@@ -146,6 +179,7 @@ export class DefaultSkillPromoter implements SkillPromoter {
       reusableCommand,
       agentContractDelta,
       policy,
+      replay,
       emittedCli,
       emittedSkillPath,
       emittedManifestPath,

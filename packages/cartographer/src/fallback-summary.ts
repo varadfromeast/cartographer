@@ -8,6 +8,7 @@ import type {
   Postcondition,
   StepValidator,
 } from "./contracts.js";
+import { classifySelector } from "./playwright-selector.js";
 import { shapeUrl } from "./state-identity.js";
 
 export function createFallbackPromotionSummary(
@@ -28,7 +29,7 @@ export function createFallbackPromotionSummary(
     recordingStartedAt: tape.recordingStartedAt,
     completedAt: tape.completedAt,
     entryUrl: tape.entry.url,
-    finalUrl: tape.steps[tape.steps.length - 1]?.after.url || tape.entry.url,
+    finalUrl: finalUrl(tape),
     stepCount: tape.steps.length,
     operationCount: tape.operations?.length || 0,
     steps,
@@ -38,13 +39,27 @@ export function createFallbackPromotionSummary(
   };
 }
 
-function toStepSummary(step: FallbackTape["steps"][number]): FallbackStepSummary {
-  const actions = step.actions.map((action): FallbackActionSummary => ({
-    method: action.method,
-    selector: action.selector,
-    selectorKind: selectorKind(action.selector),
-    arguments: action.arguments || [],
-  }));
+function finalUrl(tape: FallbackTape): string {
+  const stepUrl = tape.steps[tape.steps.length - 1]?.after.url;
+  if (stepUrl) return stepUrl;
+  for (let index = (tape.operations?.length || 0) - 1; index >= 0; index -= 1) {
+    const operationUrl = tape.operations?.[index]?.urlAfter;
+    if (operationUrl) return operationUrl;
+  }
+  return tape.entry.url;
+}
+
+function toStepSummary(
+  step: FallbackTape["steps"][number],
+): FallbackStepSummary {
+  const actions = step.actions.map(
+    (action): FallbackActionSummary => ({
+      method: action.method,
+      selector: action.selector,
+      selectorKind: selectorKind(action.selector),
+      arguments: action.arguments || [],
+    }),
+  );
   return {
     id: step.id,
     name: step.name,
@@ -56,7 +71,10 @@ function toStepSummary(step: FallbackTape["steps"][number]): FallbackStepSummary
     actions,
     validators: step.validators || [],
     selectorDiagnostics: step.selectorDiagnostics,
-    selectorWarnings: selectorWarningsForStep(actions, step.selectorDiagnostics),
+    selectorWarnings: selectorWarningsForStep(
+      actions,
+      step.selectorDiagnostics,
+    ),
   };
 }
 
@@ -65,20 +83,32 @@ function createMechanicalHints(
   steps: FallbackStepSummary[],
   evidencePreview: EvidencePreview[],
 ): MechanicalPromotionHints {
-  const selectorWarnings = unique(steps.flatMap((step) => step.selectorWarnings));
+  const selectorWarnings = unique(
+    steps.flatMap((step) => step.selectorWarnings),
+  );
   const riskFlags = new Set<string>();
   if (tape.status !== "succeeded") riskFlags.add("fallback_not_succeeded");
-  if (tape.writesToPlatform || tape.steps.some((step) => step.writesToPlatform)) {
+  if (
+    tape.writesToPlatform ||
+    tape.steps.some((step) => step.writesToPlatform)
+  ) {
     riskFlags.add("writes_to_platform");
   }
-  if (!steps.length) riskFlags.add("empty_fallback");
+  if (!steps.length && !tape.operations?.length) riskFlags.add("empty_fallback");
   if (!tape.operations?.length) riskFlags.add("no_operation_log");
-  if ((tape.operations?.length || 0) > steps.length) riskFlags.add("operation_log_has_unrecorded_context");
-  if (steps.some((step) => !step.validators.length)) riskFlags.add("steps_missing_validators");
-  if (selectorWarnings.includes("absolute_xpath")) riskFlags.add("has_absolute_xpath");
-  if (selectorWarnings.includes("body_selector")) riskFlags.add("has_body_selector");
-  if (evidencePreview.every((evidence) => evidence.kind !== "text")) riskFlags.add("no_text_evidence");
-  if (!tape.args.length && usesRuntimePlaceholders(tape)) riskFlags.add("placeholders_without_declared_args");
+  if (!steps.length && tape.operations?.length) riskFlags.add("operation_slices_only");
+  if (steps.length && (tape.operations?.length || 0) > steps.length)
+    riskFlags.add("operation_log_has_unrecorded_context");
+  if (steps.some((step) => !step.validators.length))
+    riskFlags.add("steps_missing_validators");
+  if (selectorWarnings.includes("absolute_xpath"))
+    riskFlags.add("has_absolute_xpath");
+  if (selectorWarnings.includes("body_selector"))
+    riskFlags.add("has_body_selector");
+  if (evidencePreview.every((evidence) => evidence.kind !== "text"))
+    riskFlags.add("no_text_evidence");
+  if (!tape.args.length && usesRuntimePlaceholders(tape))
+    riskFlags.add("placeholders_without_declared_args");
 
   return {
     suggestedPostconditions: suggestedPostconditions(tape),
@@ -95,7 +125,8 @@ function createMechanicalHints(
 function suggestedPostconditions(tape: FallbackTape): Postcondition[] {
   const suggestions: Postcondition[] = [];
   const finalStep = tape.steps[tape.steps.length - 1];
-  for (const validator of finalStep?.validators || []) suggestions.push(validator);
+  for (const validator of finalStep?.validators || [])
+    suggestions.push(validator);
 
   const finalUrl = finalStep?.after.url;
   if (finalUrl) {
@@ -113,17 +144,25 @@ function selectorWarningsForStep(
 ): string[] {
   const warnings = new Set<string>();
   for (const action of actions) {
-    if (action.selectorKind === "xpath" && action.selector.startsWith("xpath=/html")) {
+    if (
+      action.selectorKind === "xpath" &&
+      action.selector.startsWith("xpath=/html")
+    ) {
       warnings.add("absolute_xpath");
     }
-    if (action.selectorKind === "xpath" && action.selector.startsWith("/html")) {
+    if (
+      action.selectorKind === "xpath" &&
+      action.selector.startsWith("/html")
+    ) {
       warnings.add("absolute_xpath");
     }
     if (action.selector === "body") warnings.add("body_selector");
-    if (action.selectorKind === "unknown") warnings.add("unknown_selector_kind");
+    if (action.selectorKind === "unknown")
+      warnings.add("unknown_selector_kind");
     if (!action.selector.trim()) warnings.add("empty_selector");
   }
-  if (diagnostics?.selected.stability === "weak") warnings.add("weak_selected_selector");
+  if (diagnostics?.selected.stability === "weak")
+    warnings.add("weak_selected_selector");
   if (diagnostics?.selected.matchCount && diagnostics.selected.matchCount > 1) {
     warnings.add("non_unique_selected_selector");
   }
@@ -131,15 +170,16 @@ function selectorWarningsForStep(
 }
 
 function selectorKind(selector: string): FallbackActionSummary["selectorKind"] {
-  if (selector.startsWith("http://") || selector.startsWith("https://")) return "url";
-  if (selector.startsWith("xpath=") || selector.startsWith("/")) return "xpath";
-  if (selector.trim()) return "css";
-  return "unknown";
+  return classifySelector(selector);
 }
 
 function usesRuntimePlaceholders(tape: FallbackTape): boolean {
   return tape.steps.some((step) =>
-    step.actions.some((action) => (action.arguments || []).some((arg) => /%[a-zA-Z][a-zA-Z0-9_]*%/.test(arg))),
+    step.actions.some((action) =>
+      (action.arguments || []).some((arg) =>
+        /%[a-zA-Z][a-zA-Z0-9_]*%/.test(arg),
+      ),
+    ),
   );
 }
 
@@ -154,7 +194,9 @@ function pathFromUrl(url: string): string | undefined {
   }
 }
 
-function dedupePostconditions(postconditions: StepValidator[]): StepValidator[] {
+function dedupePostconditions(
+  postconditions: StepValidator[],
+): StepValidator[] {
   const seen = new Set<string>();
   const deduped: StepValidator[] = [];
   for (const postcondition of postconditions) {

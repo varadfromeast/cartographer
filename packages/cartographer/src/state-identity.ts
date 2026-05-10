@@ -104,8 +104,18 @@ export function actionToAtom(action: Action, instruction: string, domain = "inst
 export function shapeSelector(selector: string): string {
   return selector
     .replace(/\[\d+\]/g, "[]")
-    .replace(/@[a-zA-Z:-]+=['\"][^'\"]+['\"]/g, "@attr")
+    // Mask volatile attribute values (like dynamic IDs or classes)
+    .replace(/(=['"])[^'"]+(\d+)[^'"]*(['"])/g, "$1#$3")
+    .replace(/(@[a-zA-Z:-]+=['"])[^'"]+(['"])/g, "$1#$2")
     .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeText(value: string): string {
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/\(\d+\)/g, "(#)") // Normalize counters: (12) -> (#)
+    .replace(/\d+/g, "#") // Normalize all other numbers
     .trim();
 }
 
@@ -124,6 +134,3 @@ export function shapeUrl(url: string): string {
   }
 }
 
-function normalizeText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}

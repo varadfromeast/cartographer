@@ -15,12 +15,22 @@ import type {
 } from "./contracts.js";
 import { ensureDir } from "./fs-json.js";
 import { actionToAtom } from "./state-identity.js";
-import { evidenceDir } from "./paths.js";
+import { browserProfileDir, evidenceDir } from "./paths.js";
+import {
+  isPlaywrightLocatorSelector,
+  locatorForSelector,
+} from "./playwright-selector.js";
+import { waitForLoginIfNeeded } from "./login-wait.js";
+import { getSiteConfig } from "./site-config.js";
 
 export class StagehandBrowserSessionFactory implements BrowserSessionFactory {
-  async launchInstagram(options: LaunchOptions): Promise<BrowserSession> {
+  async launch(domain: Domain, options: LaunchOptions): Promise<BrowserSession> {
+    const site = getSiteConfig(domain);
     await ensureDir(options.cacheDir);
-    await ensureDir(path.join(options.cacheDir, "chrome-profile"));
+    const profileDir =
+      process.env.CARTOGRAPHER_BROWSER_PROFILE_DIR ||
+      browserProfileDir(domain);
+    await ensureDir(profileDir);
     const stagehand = new Stagehand({
       env: options.browser === "browserbase" ? "BROWSERBASE" : "LOCAL",
       verbose: 1,
@@ -36,15 +46,20 @@ export class StagehandBrowserSessionFactory implements BrowserSessionFactory {
               headless: options.headless,
               viewport: options.viewport,
               deviceScaleFactor: 1,
-              userDataDir: path.join(options.cacheDir, "chrome-profile"),
+              userDataDir: profileDir,
               preserveUserDataDir: true,
             }
           : undefined,
     });
     await stagehand.init();
-    const session = new StagehandBrowserSession("instagram.com", stagehand);
-    await session.goto("https://www.instagram.com/");
+    const session = new StagehandBrowserSession(domain, stagehand);
+    await session.goto(site.baseUrl);
+    await waitForLoginIfNeeded(session, site.loginWaitLabel);
     return session;
+  }
+
+  async launchInstagram(options: LaunchOptions): Promise<BrowserSession> {
+    return this.launch("instagram.com", options);
   }
 }
 
@@ -73,11 +88,18 @@ export class StagehandBrowserSession implements BrowserSession {
     }));
   }
 
-  async act(candidate: ObservedCandidate, args?: RuntimeArgs): Promise<ActOutcome> {
+  async act(
+    candidate: ObservedCandidate,
+    args?: RuntimeArgs,
+  ): Promise<ActOutcome> {
     return await this.actRaw(candidate.action, args);
   }
 
   async actRaw(action: Action, args?: RuntimeArgs): Promise<ActOutcome> {
+    if (isPlaywrightLocatorSelector(action.selector)) {
+      return await this.actWithPlaywrightLocator(action);
+    }
+
     const result = await this.stagehand.act(action, {
       variables: stringifyRuntimeArgs(args),
     });
@@ -89,19 +111,53 @@ export class StagehandBrowserSession implements BrowserSession {
   }
 
   async exists(selector: string): Promise<boolean> {
-    return (await this.page().locator(selector).count()) > 0;
+    return (await locatorForSelector(this.page() as any, selector).count()) > 0;
   }
 
   async readText(selector = "body"): Promise<string> {
-    const locator = this.page().locator(selector);
+    const locator = locatorForSelector(this.page() as any, selector);
     return await locator.innerText();
+  }
+
+  async isVisible(selector: string): Promise<boolean> {
+    const locator = locatorForSelector(this.page() as any, selector).first();
+    return await locator.isVisible();
+  }
+
+  async isEnabled(selector: string): Promise<boolean> {
+    const locator = locatorForSelector(this.page() as any, selector).first();
+    return await locator.isEnabled();
+  }
+
+  async scrollIntoView(selector: string): Promise<void> {
+    const locator = locatorForSelector(this.page() as any, selector).first();
+    await locator.scrollIntoViewIfNeeded();
+  }
+
+  async wait(milliseconds: number): Promise<void> {
+    await this.page().waitForTimeout(milliseconds);
+  }
+
+  async waitForSettle(): Promise<void> {
+    await this.page().waitForLoadState("networkidle").catch(() => {});
+    await (this.page() as any)
+      .waitForFunction(() => document.readyState === "complete", undefined, {
+        timeout: 2000,
+      })
+      .catch(() => {});
+    await this.page().waitForTimeout(100);
   }
 
   async screenshot(label: string): Promise<string> {
     const dir = evidenceDir(this.domain);
     await ensureDir(dir);
-    const safeLabel = label.replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "");
-    const filePath = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeLabel}.png`);
+    const safeLabel = label
+      .replace(/[^a-z0-9_-]+/gi, "-")
+      .replace(/^-+|-+$/g, "");
+    const filePath = path.join(
+      dir,
+      `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeLabel}.png`,
+    );
     const buffer = await this.page().screenshot();
     await fs.writeFile(filePath, buffer);
     return filePath;
@@ -123,9 +179,54 @@ export class StagehandBrowserSession implements BrowserSession {
   private page() {
     return this.stagehand.context.pages()[0];
   }
+
+  private async actWithPlaywrightLocator(action: Action): Promise<ActOutcome> {
+    const method = action.method;
+    const locator = locatorForSelector(this.page() as any, action.selector).first();
+    const actionArgs = action.arguments || [];
+    try {
+      if (method === "click") {
+        await locator.click();
+      } else if (method === "fill") {
+        await locator.fill(actionArgs[0] || "");
+      } else if (method === "press") {
+        if (!locator.press) {
+          return {
+            success: false,
+            message:
+              "Playwright locator replay does not support press in this runtime.",
+            actions: [],
+          };
+        }
+        await locator.press(actionArgs[0] || "");
+      } else {
+        return {
+          success: false,
+          message: `Playwright locator replay does not support method: ${method}`,
+          actions: [],
+        };
+      }
+
+      return {
+        success: true,
+        message: `Action [${method}] performed successfully on selector: ${action.selector}`,
+        actions: [action],
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+        actions: [],
+      };
+    }
+  }
 }
 
-function stringifyRuntimeArgs(args?: RuntimeArgs): Record<string, string> | undefined {
+function stringifyRuntimeArgs(
+  args?: RuntimeArgs,
+): Record<string, string> | undefined {
   if (!args) return undefined;
-  return Object.fromEntries(Object.entries(args).map(([key, value]) => [key, String(value)]));
+  return Object.fromEntries(
+    Object.entries(args).map(([key, value]) => [key, String(value)]),
+  );
 }

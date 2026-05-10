@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CliEmitter, CliEmitterInput, CliEmitterResult, TapeCatalog } from "./contracts.js";
+import type {
+  CliEmitter,
+  CliEmitterInput,
+  CliEmitterResult,
+  TapeCatalog,
+} from "./contracts.js";
 import { ensureDir, readJsonFile } from "./fs-json.js";
 import { catalogPath, slugifyName } from "./paths.js";
 
@@ -24,10 +29,14 @@ export class NodeCliEmitter implements CliEmitter {
     );
     const runtimeModuleUrl = new URL("./index.js", import.meta.url).href;
     await ensureDir(path.dirname(input.outputPath));
-    await fs.writeFile(input.outputPath, renderCli(input.binName, input.domain, commandInfo, runtimeModuleUrl), {
-      encoding: "utf8",
-      mode: 0o755,
-    });
+    await fs.writeFile(
+      input.outputPath,
+      renderCli(input.binName, input.domain, commandInfo, runtimeModuleUrl),
+      {
+        encoding: "utf8",
+        mode: 0o755,
+      },
+    );
     await fs.chmod(input.outputPath, 0o755);
     return {
       outputPath: input.outputPath,
@@ -45,14 +54,14 @@ function renderCli(
 ): string {
   const commandInfoJson = JSON.stringify(commandInfo, null, 2);
   return `#!/usr/bin/env node
-const { createPreloadedRuntime, parseRuntimeArgs } = await import(${JSON.stringify(runtimeModuleUrl)});
+const { appendCliOperationToActiveSegment, createPreloadedRuntime, parseRuntimeArgs } = await import(${JSON.stringify(runtimeModuleUrl)});
 
 const binName = ${JSON.stringify(binName)};
 const commandInfo = ${commandInfoJson};
 const [, , command, ...rest] = process.argv;
 
 if (!command || command === "--help" || command === "-h") {
-  console.log(\`${binName} <command> [--confirm-write] [--dry-run] [--key value]\`);
+  console.log(\`${binName} <command> [--task-id <taskId>] [--confirm-write] [--dry-run] [--key value]\`);
   console.log("");
   console.log("Commands:");
   for (const [name, info] of Object.entries(commandInfo)) {
@@ -102,11 +111,20 @@ const result = await runtime.runProcess({
   domain: ${JSON.stringify(domain)},
   processName: commandInfo[command].processName,
   args: parsed.args,
+  taskId: parsed.args.taskId ? String(parsed.args.taskId) : undefined,
   confirmWrite: parsed.confirmWrite,
   dryRun: parsed.dryRun,
 });
+await appendCliOperationToActiveSegment({
+  domain: ${JSON.stringify(domain)},
+  taskId: parsed.args.taskId ? String(parsed.args.taskId) : undefined,
+  command: [binName, command, ...rest].join(" "),
+  processName: commandInfo[command].processName,
+  writesToPlatform: commandInfo[command].writesToPlatform,
+  result,
+});
 console.log(JSON.stringify(result, null, 2));
-if (!result.success) process.exitCode = 1;
+process.exit(result.success ? 0 : 1);
 
 function toCliFlag(argName) {
   return argName.replace(/[A-Z]/g, (match) => \`-\${match.toLowerCase()}\`);

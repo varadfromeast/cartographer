@@ -1,0 +1,119 @@
+{
+  "action": "review_batch",
+  "taskId": "task-75cc89041984",
+  "reasoning": "Promote reusable DM primitives first, then reject the task-specific fallback remainder. This avoids marking a source fallback rejected before its operation slices are promoted.",
+  "confidence": "high",
+  "decisions": [
+    {
+      "action": "promote",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:navigation-10",
+      "candidateSliceId": "navigation-10",
+      "operationIndexes": [28],
+      "reasoning": "Opening the Instagram direct inbox is a reusable deterministic navigation step with a clear URL postcondition.",
+      "confidence": "high",
+      "commandName": "open_inbox",
+      "description": "Open Instagram direct messages inbox",
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/direct/inbox"
+        }
+      ]
+    },
+    {
+      "action": "promote",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:state_transition-11",
+      "candidateSliceId": "state_transition-11",
+      "operationIndexes": [30],
+      "reasoning": "Opening a DM thread from the inbox by visible title is reusable when parameterized by thread name.",
+      "confidence": "high",
+      "commandName": "open_thread_by_name",
+      "description": "Open an Instagram direct-message thread by visible thread name from the inbox",
+      "args": [
+        {
+          "name": "threadName",
+          "required": true,
+          "description": "Visible name of the direct-message thread to open"
+        }
+      ],
+      "valueBindings": [
+        {
+          "operationIndex": 30,
+          "argName": "threadName",
+          "target": "selector"
+        }
+      ],
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/direct/t/"
+        },
+        {
+          "type": "text_contains",
+          "selector": "body",
+          "value": "%threadName%"
+        }
+      ]
+    },
+    {
+      "action": "promote",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:write_and_verify-27",
+      "candidateSliceId": "write_and_verify-27",
+      "operationIndexes": [33, 36, 37],
+      "reasoning": "Filling the current DM textbox, clicking Send, and verifying the message text in the thread is reusable when parameterized by message.",
+      "confidence": "high",
+      "commandName": "send_message_in_current_thread",
+      "description": "Send a message in the currently open Instagram direct-message thread",
+      "args": [
+        {
+          "name": "message",
+          "required": true,
+          "description": "Message text to send"
+        }
+      ],
+      "valueBindings": [
+        {
+          "operationIndex": 33,
+          "argName": "message",
+          "target": "argument"
+        }
+      ],
+      "postconditions": [
+        {
+          "type": "text_contains",
+          "selector": "body",
+          "value": "%message%"
+        }
+      ]
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "110a9f33461c05b12b728a61e8a36097ef5b398c29f39c17e99a46c9d30e7fef",
+      "reviewItemId": "110a9f33461c05b12b728a61e8a36097ef5b398c29f39c17e99a46c9d30e7fef:navigation-01",
+      "candidateSliceId": "navigation-01",
+      "operationIndexes": [0],
+      "reasoning": "Opening the Instagram homepage is too generic to be useful as a site skill and the postcondition is weak.",
+      "confidence": "high",
+      "rejectReason": "Weak generic navigation."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "110a9f33461c05b12b728a61e8a36097ef5b398c29f39c17e99a46c9d30e7fef",
+      "reviewItemId": "110a9f33461c05b12b728a61e8a36097ef5b398c29f39c17e99a46c9d30e7fef:fallback",
+      "reasoning": "The whole fallback only loaded and read the login page, which is not a reusable user workflow.",
+      "confidence": "high",
+      "rejectReason": "No independently valuable reusable workflow."
+    },
+    {
+      "action": "reject",
+      "fallbackTapeId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2",
+      "reviewItemId": "260f82767a95e155293b2918fea9d39a9ac573afed2d49104dafecaf23be60c2:fallback",
+      "reasoning": "The full fallback includes login prompts, failed selectors, task-specific profile research, screenshots, and the private recipient/message. Only the clean DM primitives were promoted.",
+      "confidence": "high",
+      "rejectReason": "Whole fallback is noisy, private, and task-specific."
+    }
+  ]
+}

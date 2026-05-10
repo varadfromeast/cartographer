@@ -7,13 +7,17 @@ import type {
   TapeStore,
 } from "./contracts.js";
 import { sha256 } from "./hash.js";
-import { deriveWritesToPlatform, inferPostconditionsFromTape } from "./promotion-policy.js";
+import {
+  deriveWritesToPlatform,
+  inferPostconditionsFromTape,
+} from "./promotion-policy.js";
 
 export function createPromotionProposal(input: {
   tape: FallbackTape;
   commandName: string;
   description: string;
   outputs?: ProcessTape["outputs"];
+  stateScope?: ProcessTape["stateScope"];
   postconditions?: ProcessTape["postconditions"];
   writesToPlatform?: boolean;
   existingProcessNames: string[];
@@ -23,10 +27,14 @@ export function createPromotionProposal(input: {
   const commandName = input.commandName.trim();
   const description = input.description.trim();
   if (!/^[a-z][a-z0-9_]*$/.test(commandName)) {
-    throw new Error("Command name must be snake_case, for example send_message.");
+    throw new Error(
+      "Command name must be snake_case, for example send_message.",
+    );
   }
   if (!description) {
-    throw new Error("Promotion requires an explicit --description so SKILL.md does not overstate what the tape does.");
+    throw new Error(
+      "Promotion requires an explicit --description so SKILL.md does not overstate what the tape does.",
+    );
   }
   if (input.tape.status !== "succeeded") {
     throw new Error("Cannot promote a failed fallback tape.");
@@ -51,9 +59,13 @@ export function createPromotionProposal(input: {
     description,
     args: input.tape.args,
     outputs: input.outputs,
+    stateScope: input.stateScope,
     postconditions: input.postconditions,
-    writesToPlatform: input.writesToPlatform ?? deriveWritesToPlatform(input.tape),
-    reason: input.policyDecision?.reason || "Explicit promotion requested by the calling agent.",
+    writesToPlatform:
+      input.writesToPlatform ?? deriveWritesToPlatform(input.tape),
+    reason:
+      input.policyDecision?.reason ||
+      "Explicit promotion requested by the calling agent.",
     reviewer: "agent",
     policyFindings: input.policyDecision?.findings,
     createdAt: now,
@@ -70,21 +82,37 @@ export async function applyPromotion(
     throw new Error(`Promotion proposal is not promotable: ${proposal.reason}`);
   }
 
+  const process = processFromPromotionProposal(proposal, tape);
+  await tapeStore.saveProcess(process);
+  await promotionStore.markApplied(proposal.domain, proposal.id);
+  return process;
+}
+
+export function processFromPromotionProposal(
+  proposal: PromotionProposal,
+  tape: FallbackTape,
+): ProcessTape {
   const now = new Date().toISOString();
-  const process: ProcessTape = {
+  return {
     name: proposal.commandName,
     description: proposal.description || tape.intent,
     domain: tape.domain,
+    promotionSource: {
+      fallbackTapeId: tape.id,
+      sourceFallbackTapeId: tape.sourceFallbackTapeId,
+      operationIndexes: tape.sourceOperationIndexes,
+      operationIds: (tape.operations || []).map((operation) => operation.id),
+      source: tape.source,
+    },
     entry: tape.entry,
     steps: tape.steps,
     args: proposal.args || tape.args,
     outputs: proposal.outputs,
-    postconditions: proposal.postconditions || inferPostconditionsFromTape(tape),
+    stateScope: proposal.stateScope,
+    postconditions:
+      proposal.postconditions || inferPostconditionsFromTape(tape),
     writesToPlatform: proposal.writesToPlatform ?? deriveWritesToPlatform(tape),
     createdAt: now,
     updatedAt: now,
   };
-  await tapeStore.saveProcess(process);
-  await promotionStore.markApplied(proposal.domain, proposal.id);
-  return process;
 }

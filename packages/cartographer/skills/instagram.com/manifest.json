@@ -1,20 +1,44 @@
 {
   "schemaVersion": 1,
   "domain": "instagram.com",
-  "generatedAt": "2026-05-03T09:14:52.622Z",
+  "generatedAt": "2026-05-10T06:49:40.705Z",
   "agentContract": {
     "toolSelection": "agent-controlled",
     "commandExecution": "cli-controlled",
     "successRule": "success is true only when actions complete and final postconditions pass",
     "driftRule": "hash drift is diagnostic and does not fail a command by itself",
     "fallbackRule": "use fallback recording when no listed command fits or an invoked command fails",
-    "learningRule": "if fallback is used, end-task review is required and every reusable fallback should be promoted into a CLI command"
+    "acquisitionFallbackRule": "browser acquisition fallback must go through cg use/cg shell or cartographer pw; raw CDP, standalone Playwright scripts, and separate browsers are external escape hatches and do not satisfy acquisition review",
+    "learningRule": "if fallback is used, end-task review is required and every reusable fallback should be promoted into a CLI command",
+    "selectorRule": "selectors may be snapshot refs, CSS, XPath, or Cartographer Playwright locator forms",
+    "taskBrowserRule": "when --task-id is passed, acquired CLI commands and cartographer pw commands attach to a Cartographer-owned browser using the site default profile; complete-task closes the browser session",
+    "loginWaitRule": "if Instagram shows a login screen, Cartographer pauses for human login and resumes after Enter",
+    "fallbackSessionRule": "a failed shell/cartographer pw selector/action is recoverable inside the same task browser; retry with a better selector instead of starting another task. prefer cg use for multi-operation work because it keeps a hot recorded Playwright CLI session attached",
+    "segmentJournalRule": "active fallback segments write events.jsonl; cartographer pw commands are fallback evidence, acquired CLI commands run with the same taskId are journaled as non-promotable context",
+    "promotionEligibilityRule": "review may use all journal events as context, but promotion ignores events with promotionEligible:false",
+    "promotionReplayRule": "apply-promotion-decision replays non-write/no-arg promotions in the task browser before catalog mutation; write-capable promotions are not auto-replayed",
+    "scriptedFallbackRule": "recorded fallback uses shell commands or cartographer pw <playwright-cli-command>; review-task materializes active pw journals into fallback tapes",
+    "stateScopeRule": "commands may declare stateScope; Cartographer checks preconditions before execution and returns precondition_failed with suggestedAutoEnterProcessName/fallbackRecommended when unmet",
+    "supportedPlaywrightSelectors": [
+      "e15",
+      "testid=\"...\"",
+      "role=button[name=\"...\"]",
+      "label=\"...\"",
+      "placeholder=\"...\"",
+      "title=\"...\"",
+      "text=\"...\""
+    ]
   },
   "taskLifecycle": {
-    "beginTaskCommand": "node packages/cartographer/dist/cli.js begin-task instagram.com --intent <task>",
+    "beginTaskCommand": "cg begin-task instagram --intent <task>",
+    "taskFileRule": "begin-task persists task.json immediately; cartographer pw --task-id appends segment.json files under that task",
     "fallbackCreatesLearningDebt": true,
     "closeoutRequiredWhenFallbackUsed": true,
-    "reviewCommandPattern": "node packages/cartographer/dist/cli.js end-task-review instagram.com --since <taskStartedAt>",
+    "completeTaskCommand": "cg complete-task instagram --task-id <taskId>",
+    "noAcquisitionCompleteCommand": "cg complete-task instagram --task-id <taskId> --no-acquisition-reason <reason>",
+    "noAcquisitionCloseRule": "if fallback segments exist but no acquisition packet was saved, completion requires an explicit no-acquisition reason",
+    "taskReviewCommand": "cg review-task instagram --task-id <taskId>",
+    "applyDecisionCommand": "cg apply-promotion-decision instagram --decision-file <decision.json>",
     "decisions": [
       "promote",
       "reject",
@@ -31,24 +55,33 @@
       "enforced": [
         "command name must be snake_case and unique",
         "fallback tape must have succeeded and must not already be promoted",
-        "fallback tape must contain at least one recorded step",
+        "promotion must identify at least one recorded step or exact operationIndexes for an operation slice",
         "description must explicitly describe what the command does",
         "write commands are write-protected if the tape or any step writes",
         "deterministic final postconditions are required",
         "write promotions require explicit postconditions",
+        "if stateScope is present, it must declare at least one precondition",
+        "stateScope.autoEnterProcessName must point to an existing non-write command",
         "runtime placeholders must have declared args",
-        "output contracts must have valid names, selectors, and descriptions"
+        "output contracts must have valid names, selectors, and descriptions",
+        "if duplicate candidates are surfaced, promotion requires explicit duplicateJudgment"
       ],
       "advisory": [
         "the agent is responsible for deciding whether the tape is semantically generic and reusable",
+        "the agent is responsible for deciding whether surfaced duplicate candidates already cover the fallback capability",
+        "evaluate operation slices independently; noisy sibling operations do not disqualify clean slices",
+        "promotion-ready candidate slices should be promoted or explicitly rejected before rejecting the whole fallback",
+        "prefer deterministic browser/evidence commands over semantic workflow commands",
+        "prefer selector-backed textual outputs over screenshots for read/evidence commands",
         "non-write commands without outputs are navigation/state commands only",
+        "state-scoped commands should expose the narrow state they require; global commands should omit stateScope",
         "prefer rejecting a broad task fallback and promoting only a smaller reusable sub-operation"
       ]
     },
     "promotionDecisionWorkflow": {
-      "createReviewCommand": "node packages/cartographer/dist/cli.js create-promotion-review instagram.com <fallback-id>",
-      "applyDecisionCommand": "node packages/cartographer/dist/cli.js apply-promotion-decision instagram.com --decision-file <decision.json>",
-      "agentInstruction": "Reason over review-request.json, use decision-template.json as the starting shape when useful, and return one flat PromotionDecision JSON. Do not run promotion commands directly in normal workflow.",
+      "createReviewCommand": "cg create-promotion-review instagram <fallback-id>",
+      "applyDecisionCommand": "cg apply-promotion-decision instagram --decision-file <decision.json>",
+      "agentInstruction": "For task review, reason over review-request.json, start from decision-template.json, and return one PromotionBatchDecision JSON. Decide promotion-ready slices independently before rejecting the remaining whole fallback.",
       "decisionActions": [
         "promote",
         "reject",
@@ -59,124 +92,19 @@
   },
   "cli": {
     "binName": "instagram-com-cli",
-    "commandPattern": "instagram-com-cli <command> [--dry-run] [--confirm-write] [--key value]",
-    "fallbackCommand": "node packages/cartographer/dist/cli.js fallback instagram.com --intent <task>",
-    "reviewCommand": "node packages/cartographer/dist/cli.js end-task-review instagram.com"
+    "cliPath": "/Users/varad/.cartographer/bin/instagram-com-cli",
+    "shellCommand": "cg use instagram --task \"<task>\"",
+    "scriptedShellCommand": "cg use instagram --task \"<task>\" < commands.txt",
+    "execCommandPattern": "cg exec-command instagram <command> [--task-id <taskId>] [--auto-chain] [--dry-run] [--confirm-write] [--key value]",
+    "commandPattern": "/Users/varad/.cartographer/bin/instagram-com-cli <command> [--task-id <taskId>] [--dry-run] [--confirm-write] [--key value]",
+    "fallbackCommand": "cg pw instagram --task-id <taskId> --intent <segment> snapshot",
+    "scriptedFallbackCommand": "cg pw instagram --task-id <taskId> goto https://www.instagram.com/direct/inbox/",
+    "planCommand": "cg plan instagram <processName>",
+    "taskReviewCommand": "cg review-task instagram --task-id <taskId>",
+    "completeTaskCommand": "cg complete-task instagram --task-id <taskId>",
+    "taskSummaryCommand": "cg task-summary instagram --task-id <taskId>",
+    "reviewCommand": "cg review-task instagram --task-id <taskId>",
+    "cleanupCommand": "cg cleanup-recordings instagram --confirm-delete"
   },
-  "commands": [
-    {
-      "name": "open-explore",
-      "processName": "open_explore",
-      "description": "open Instagram Explore page",
-      "writesToPlatform": false,
-      "args": [],
-      "outputs": [],
-      "postconditions": [
-        {
-          "type": "url_contains",
-          "value": "/explore"
-        }
-      ],
-      "success": {
-        "actionFailuresFailCommand": true,
-        "postconditionsMustPass": true,
-        "driftOnlyFailsCommand": false
-      },
-      "failureFields": [
-        "failure",
-        "execution.actionFailures",
-        "postconditions.checks",
-        "drift.steps"
-      ]
-    },
-    {
-      "name": "open-inbox",
-      "processName": "open_inbox",
-      "description": "open Instagram direct messages inbox",
-      "writesToPlatform": false,
-      "args": [],
-      "outputs": [],
-      "postconditions": [
-        {
-          "type": "url_contains",
-          "value": "/direct/inbox"
-        }
-      ],
-      "success": {
-        "actionFailuresFailCommand": true,
-        "postconditionsMustPass": true,
-        "driftOnlyFailsCommand": false
-      },
-      "failureFields": [
-        "failure",
-        "execution.actionFailures",
-        "postconditions.checks",
-        "drift.steps"
-      ]
-    },
-    {
-      "name": "send-message",
-      "processName": "send_message",
-      "description": "send message in current Instagram direct thread",
-      "writesToPlatform": true,
-      "args": [
-        {
-          "name": "message",
-          "required": true,
-          "description": "DM message text"
-        }
-      ],
-      "outputs": [],
-      "postconditions": [
-        {
-          "type": "text_contains",
-          "selector": "body",
-          "value": "%message%"
-        }
-      ],
-      "success": {
-        "actionFailuresFailCommand": true,
-        "postconditionsMustPass": true,
-        "driftOnlyFailsCommand": false
-      },
-      "failureFields": [
-        "failure",
-        "execution.actionFailures",
-        "postconditions.checks",
-        "drift.steps"
-      ]
-    },
-    {
-      "name": "send-test-dm",
-      "processName": "send_test_dm",
-      "description": "send a test DM to va_rad_",
-      "writesToPlatform": true,
-      "args": [
-        {
-          "name": "message",
-          "required": true,
-          "description": "DM message text"
-        }
-      ],
-      "outputs": [],
-      "postconditions": [
-        {
-          "type": "text_contains",
-          "selector": "body",
-          "value": "%message%"
-        }
-      ],
-      "success": {
-        "actionFailuresFailCommand": true,
-        "postconditionsMustPass": true,
-        "driftOnlyFailsCommand": false
-      },
-      "failureFields": [
-        "failure",
-        "execution.actionFailures",
-        "postconditions.checks",
-        "drift.steps"
-      ]
-    }
-  ]
+  "commands": []
 }

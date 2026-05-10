@@ -1,5 +1,6 @@
 import type { CartographerRuntime, Domain } from "./contracts.js";
 import { StagehandBrowserSessionFactory } from "./browser-session.js";
+import { TaskScopedBrowserSessionFactory } from "./task-browser.js";
 import { JsonStateActionCache } from "./state-action-cache.js";
 import { BasicStateIdentity } from "./state-identity.js";
 import { JsonTapeStore } from "./tape-store.js";
@@ -11,7 +12,7 @@ export function createRuntime(): CartographerRuntime {
   const logger = new ConsoleCartographerLogger();
   const registry = new PreloadedSkillRegistry(new JsonTapeStore(), logger);
   return new ProcessTapeRuntime(
-    new StagehandBrowserSessionFactory(),
+    new TaskScopedBrowserSessionFactory(new StagehandBrowserSessionFactory()),
     new BasicStateIdentity(),
     registry,
     new JsonStateActionCache(),
@@ -20,12 +21,14 @@ export function createRuntime(): CartographerRuntime {
   );
 }
 
-export async function createPreloadedRuntime(domain: Domain): Promise<CartographerRuntime> {
+export async function createPreloadedRuntime(
+  domain: Domain,
+): Promise<CartographerRuntime> {
   const logger = new ConsoleCartographerLogger();
   const registry = new PreloadedSkillRegistry(new JsonTapeStore(), logger);
   await registry.preload(domain);
   return new ProcessTapeRuntime(
-    new StagehandBrowserSessionFactory(),
+    new TaskScopedBrowserSessionFactory(new StagehandBrowserSessionFactory()),
     new BasicStateIdentity(),
     registry,
     new JsonStateActionCache(),
@@ -53,7 +56,9 @@ export function parseRuntimeArgs(argv: string[]): {
       continue;
     }
     if (token.startsWith("--")) {
-      const key = token.slice(2).replace(/-([a-z])/g, (_, char: string) => char.toUpperCase());
+      const key = token
+        .slice(2)
+        .replace(/-([a-z])/g, (_, char: string) => char.toUpperCase());
       const next = argv[index + 1];
       if (!next || next.startsWith("--")) {
         args[key] = true;
