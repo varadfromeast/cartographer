@@ -65,16 +65,22 @@ importers:
 
   packages/cartographer:
     dependencies:
-      '@browserbasehq/stagehand':
-        specifier: workspace:*
-        version: link:../core
+      mdream:
+        specifier: ^1.2.2
+        version: 1.2.2
       playwright:
         specifier: ^1.52.0
         version: 1.52.0
+      proper-lockfile:
+        specifier: ^4.1.2
+        version: 4.1.2
     devDependencies:
       '@types/node':
         specifier: ^20.11.30
         version: 20.17.32
+      '@types/proper-lockfile':
+        specifier: ^4.1.4
+        version: 4.1.4
       tsx:
         specifier: ^4.19.4
         version: 4.19.4
@@ -1759,6 +1765,78 @@ packages:
   '@manypkg/get-packages@1.1.3':
     resolution: {integrity: sha512-fo+QhuU3qE/2TQMQmbVMqaQ6EWbMhi4ABWP+O4AM1NqPBuy0OrApV5LO6BrrgnhtAHS2NH6RrVk9OL181tTi8A==}
 
+  '@mdream/rust-android-arm-eabi@1.2.2':
+    resolution: {integrity: sha512-seiLXnZrV04JxoBU0Q+GZ2EPviccb+2up9zKqVNmedY70YxNBi1FKWaBNShnRAwuPpjM8KfoK0zaDdpSz3BAaQ==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [arm]
+    os: [android]
+
+  '@mdream/rust-android-arm64@1.2.2':
+    resolution: {integrity: sha512-jgVX3M6Zq7iOWjOt5faCvW5KV1SOcX9uS9cM8/9x9kNxVtdHZBWh2q+40TtPmGrMKooejl+bWGVTf3yIsWqbOQ==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [arm64]
+    os: [android]
+
+  '@mdream/rust-darwin-arm64@1.2.2':
+    resolution: {integrity: sha512-U6Hbq583mvTTnNyVSmVpGDHMwbabQbyca0/3DpHrXE/6SbXh8iD4DnB4zHGFn5AJUO7FnoLeXQw5XeAka5jnmg==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@mdream/rust-darwin-x64@1.2.2':
+    resolution: {integrity: sha512-5h32lLZtnjfUIHoxKZIBTi3vHn6doBmWlJ9ZZsAUEfDBSVLpItrMpVjfg/Ohi/qB7Hegzpwt6vKh+n5WiAqJYw==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@mdream/rust-freebsd-x64@1.2.2':
+    resolution: {integrity: sha512-/9N7rfZLNr9ZiBaTDv8tM04bWajS0buy8FggDzv28oNTbiq2porxgqwdkcETNTz6f31oNbOHA5trsA0G/7nCCQ==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [x64]
+    os: [freebsd]
+
+  '@mdream/rust-linux-arm-gnueabihf@1.2.2':
+    resolution: {integrity: sha512-TtyK30uSdLvafazTd7+bRhIBa1ZnvZJUcy6HlJev9G6lV6QoBoFZ90readr6b/pRxlrwl7hJodmsqVS9arto1w==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [arm]
+    os: [linux]
+
+  '@mdream/rust-linux-arm64-gnu@1.2.2':
+    resolution: {integrity: sha512-fuXLlmgaA+cMTog5ZGLwb3zHH/cEaDZ61pk2yY+uMd4CI6ooXWY6Tm15vrkztN9S1FmWUCErt3kPW/F2YRD5wA==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@mdream/rust-linux-arm64-musl@1.2.2':
+    resolution: {integrity: sha512-54VlVDteZ1oaHRVGtgkfFE/0c15fDqwf7NksHs0kDo690yj4zKHS6YMte+qs0bfUQxil0EqeJ3wMkAu5OAQE7g==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@mdream/rust-linux-x64-gnu@1.2.2':
+    resolution: {integrity: sha512-IeO/kvbjGj5MT7vjgyIZIqnL9idYfBqbKWFwwO7AmX7Vx0LZGZRjCbJAQElfByz8dgoilVcRiT33BVpwhGqp7A==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [x64]
+    os: [linux]
+
+  '@mdream/rust-linux-x64-musl@1.2.2':
+    resolution: {integrity: sha512-8PRTaT6sslDczSX9mJYXIDQS9ylgHKBv9UcU0i8BU5MXiv9Ed4ZgTFGBir2omklBvatoLu2kSPKMXtvIX9+55w==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [x64]
+    os: [linux]
+
+  '@mdream/rust-win32-arm64-msvc@1.2.2':
+    resolution: {integrity: sha512-EI4pxLBZrXaY9V0jrkSjJ546hPDu5twY7/+KUt8tAyTCksPnYc3eJdrlpyrNq3PRUk3Nzj4oHPQ3ICYStR4C1Q==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@mdream/rust-win32-x64-msvc@1.2.2':
+    resolution: {integrity: sha512-TZQCli58yGb38ewZ0tn8OiVjwQ8n1xpGYqqn6PQLCzTW5K6lb/0NmUGs33f2UQph9NqU4IIb8M5xV+q1sNp4dQ==}
+    engines: {node: '>= 22.0.0'}
+    cpu: [x64]
+    os: [win32]
+
   '@mdx-js/mdx@3.1.0':
     resolution: {integrity: sha512-/QxEhPAvGwbQmy1Px8F899L5Uc2KZ6JtXwlCgJmjSTBedwOZkByYcBG4GceIGPXRDsmfxhHazuS+hlOShRLeDw==}
 
@@ -2229,6 +2307,9 @@ packages:
   '@types/node@22.13.1':
     resolution: {integrity: sha512-jK8uzQlrvXqEU91UxiK5J7pKHyzgnI1Qnl0QDHIgVGuolJhRb9EEl28Cj9b3rGR8B2lhFCtvIm5os8lFnO/1Ew==}
 
+  '@types/proper-lockfile@4.1.4':
+    resolution: {integrity: sha512-uo2ABllncSqg9F1D4nugVl9v93RmjxF6LJzQLMLDdPaXCUIDPeOJ21Gbqi43xNKzBi/WQ0Q0dICqufzQbMjipQ==}
+
   '@types/react@19.1.3':
     resolution: {integrity: sha512-dLWQ+Z0CkIvK1J8+wrDPwGxEYFA4RAyHoZPxHVGspYmFVnwGSNT24cGIhFJrtfRnWVuW8X7NO52gCXmhkVUWGQ==}
 
@@ -2324,6 +2405,7 @@ packages:
 
   '@ungap/structured-clone@1.3.0':
     resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
+    deprecated: Potential CWE-502 - Update to 1.3.1 or higher
 
   '@vercel/functions@1.6.0':
     resolution: {integrity: sha512-R6FKQrYT5MZs5IE1SqeCJWxMuBdHawFcCZboKKw8p7s+6/mcd55Gx6tWmyKnQTyrSEA04NH73Tc9CbqpEle8RA==}
@@ -2653,7 +2735,7 @@ packages:
   basic-ftp@5.0.5:
     resolution: {integrity: sha512-4Bcg1P8xhUuqcii/S0Z9wiHIrQVPMermM1any+MX5GeGD7faD3/msQUDGLol9wOcz4/jbg/WJnGqoJF6LiBdtg==}
     engines: {node: '>=10.0.0'}
-    deprecated: Security vulnerability fixed in 5.2.0, please upgrade
+    deprecated: Security vulnerability fixed in 5.2.1, please upgrade
 
   better-opn@3.0.2:
     resolution: {integrity: sha512-aVNobHnJqLiUelTaHat9DZ1qM2w0C0Eym4LPI/3JxOnSokGVdsl1T1kN7TFvsEAD8G47A6VKQ0TVHqbBnYMJlQ==}
@@ -4750,6 +4832,10 @@ packages:
     resolution: {integrity: sha512-xySmf8g4fPKMeC07jXGz971EkLbWAJ83s4US2Tj9lEdnZ142UP5grN73H1Xd3HzrdbU5o9GYYP/y8F9ZSwLE9g==}
     deprecated: '`mdast` was renamed to `remark`'
 
+  mdream@1.2.2:
+    resolution: {integrity: sha512-tzTnANKp19wDbBasOx9SBJHm27MPTFDVOuFGUiRsKLxv6hW4cgOmcVb37yG5L1gs6/8DfJul/PQmyEXf5+FpLA==}
+    hasBin: true
+
   media-typer@0.3.0:
     resolution: {integrity: sha512-dq+qelQ9akHpcOl/gUVRTxVIOkAJ1wR3QAvb4RsVjS8oVoFjDGTc679wJYmUmknUF5HwMLOgb5O+a3KxfWapPQ==}
     engines: {node: '>= 0.6'}
@@ -5536,6 +5622,9 @@ packages:
     resolution: {integrity: sha512-6ZiOBfCywsD4k1BN9IX0uZhF+tJkV8q8llP64G5Hajs4JOeVLPCwpPVcpXy3BwYiUGgyJzsJJQeOIv7+hDSq8g==}
     engines: {node: ^16 || ^18 || >=20}
 
+  proper-lockfile@4.1.2:
+    resolution: {integrity: sha512-TjNPblN4BwAWMXU8s9AEz4JmQxnD1NNL7bNOY/AKUzyamc379FWASUhc/K1pL2noVb+XmZKLL68cjzLsiOAMaA==}
+
   property-information@7.0.0:
     resolution: {integrity: sha512-7D/qOz/+Y4X/rzSB6jKxKUsQnphO046ei8qxG59mtM3RG3DHgTK81HrxrmoDVINJb8NKT5ZsRbwHvQ6B68Iyhg==}
 
@@ -5785,6 +5874,10 @@ packages:
 
   retext@9.0.0:
     resolution: {integrity: sha512-sbMDcpHCNjvlheSgMfEcVrZko3cDzdbe1x/e7G66dFp0Ff7Mldvi2uv6JkJQzdRcvLYE8CA8Oe8siQx8ZOgTcA==}
+
+  retry@0.12.0:
+    resolution: {integrity: sha512-9LkiTwjUh6rT555DtE9rTX+BKByPfrMzEAtnlEtdEwr3Nkffwiihqe2bWADg+OQRjt9gl6ICdmB/ZFDCGAtSow==}
+    engines: {node: '>= 4'}
 
   retry@0.13.1:
     resolution: {integrity: sha512-XQBQ3I8W1Cge0Seh+6gjj03LbmRFWuoszgK9ooCpwYIrhhoO80pfq4cUkU5DkknwfOfFteRwlZ56PYOGYyFWdg==}
@@ -6531,6 +6624,7 @@ packages:
 
   uuid@10.0.0:
     resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   uuid@11.1.0:
@@ -6544,6 +6638,7 @@ packages:
 
   uuid@9.0.1:
     resolution: {integrity: sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   v8-to-istanbul@9.3.0:
@@ -8149,6 +8244,42 @@ snapshots:
       globby: 11.1.0
       read-yaml-file: 1.1.0
 
+  '@mdream/rust-android-arm-eabi@1.2.2':
+    optional: true
+
+  '@mdream/rust-android-arm64@1.2.2':
+    optional: true
+
+  '@mdream/rust-darwin-arm64@1.2.2':
+    optional: true
+
+  '@mdream/rust-darwin-x64@1.2.2':
+    optional: true
+
+  '@mdream/rust-freebsd-x64@1.2.2':
+    optional: true
+
+  '@mdream/rust-linux-arm-gnueabihf@1.2.2':
+    optional: true
+
+  '@mdream/rust-linux-arm64-gnu@1.2.2':
+    optional: true
+
+  '@mdream/rust-linux-arm64-musl@1.2.2':
+    optional: true
+
+  '@mdream/rust-linux-x64-gnu@1.2.2':
+    optional: true
+
+  '@mdream/rust-linux-x64-musl@1.2.2':
+    optional: true
+
+  '@mdream/rust-win32-arm64-msvc@1.2.2':
+    optional: true
+
+  '@mdream/rust-win32-x64-msvc@1.2.2':
+    optional: true
+
   '@mdx-js/mdx@3.1.0(acorn@8.15.0)':
     dependencies:
       '@types/estree': 1.0.8
@@ -8916,6 +9047,10 @@ snapshots:
   '@types/node@22.13.1':
     dependencies:
       undici-types: 6.20.0
+
+  '@types/proper-lockfile@4.1.4':
+    dependencies:
+      '@types/retry': 0.12.0
 
   '@types/react@19.1.3':
     dependencies:
@@ -11902,6 +12037,21 @@ snapshots:
 
   mdast@3.0.0: {}
 
+  mdream@1.2.2:
+    optionalDependencies:
+      '@mdream/rust-android-arm-eabi': 1.2.2
+      '@mdream/rust-android-arm64': 1.2.2
+      '@mdream/rust-darwin-arm64': 1.2.2
+      '@mdream/rust-darwin-x64': 1.2.2
+      '@mdream/rust-freebsd-x64': 1.2.2
+      '@mdream/rust-linux-arm-gnueabihf': 1.2.2
+      '@mdream/rust-linux-arm64-gnu': 1.2.2
+      '@mdream/rust-linux-arm64-musl': 1.2.2
+      '@mdream/rust-linux-x64-gnu': 1.2.2
+      '@mdream/rust-linux-x64-musl': 1.2.2
+      '@mdream/rust-win32-arm64-msvc': 1.2.2
+      '@mdream/rust-win32-x64-msvc': 1.2.2
+
   media-typer@0.3.0: {}
 
   media-typer@1.1.0: {}
@@ -12841,6 +12991,12 @@ snapshots:
       '@opentelemetry/api': 1.9.0
       tdigest: 0.1.2
 
+  proper-lockfile@4.1.2:
+    dependencies:
+      graceful-fs: 4.2.11
+      retry: 0.12.0
+      signal-exit: 3.0.7
+
   property-information@7.0.0: {}
 
   proxy-addr@2.0.7:
@@ -13219,6 +13375,8 @@ snapshots:
       retext-latin: 4.0.0
       retext-stringify: 4.0.0
       unified: 11.0.5
+
+  retry@0.12.0: {}
 
   retry@0.13.1: {}
 

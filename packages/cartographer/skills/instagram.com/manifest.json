@@ -1,28 +1,30 @@
 {
   "schemaVersion": 1,
   "domain": "instagram.com",
-  "generatedAt": "2026-05-10T06:49:40.705Z",
+  "generatedAt": "2026-05-23T11:44:21.526Z",
   "agentContract": {
     "toolSelection": "agent-controlled",
     "commandExecution": "cli-controlled",
     "successRule": "success is true only when actions complete and final postconditions pass",
     "driftRule": "hash drift is diagnostic and does not fail a command by itself",
     "fallbackRule": "use fallback recording when no listed command fits or an invoked command fails",
-    "acquisitionFallbackRule": "browser acquisition fallback must go through cg use/cg shell or cartographer pw; raw CDP, standalone Playwright scripts, and separate browsers are external escape hatches and do not satisfy acquisition review",
-    "learningRule": "if fallback is used, end-task review is required and every reusable fallback should be promoted into a CLI command",
+    "acquisitionFallbackRule": "browser acquisition fallback must go through cg use, cg shell, or cg pw; raw CDP, standalone Playwright scripts, and separate browsers are external escape hatches and do not satisfy acquisition review",
+    "learningRule": "if fallback is used, end-task review is required; every reusable fallback, acquisition obligation, and high-value read/write candidate should be promoted, rejected, or marked for rerecording",
     "selectorRule": "selectors may be snapshot refs, CSS, XPath, or Cartographer Playwright locator forms",
-    "taskBrowserRule": "when --task-id is passed, acquired CLI commands and cartographer pw commands attach to a Cartographer-owned browser using the site default profile; complete-task closes the browser session",
+    "taskBrowserRule": "when --task-id is passed, acquired CLI commands and cg pw commands attach to a Cartographer-owned browser using the site default profile; complete-task closes the browser session",
     "loginWaitRule": "if Instagram shows a login screen, Cartographer pauses for human login and resumes after Enter",
-    "fallbackSessionRule": "a failed shell/cartographer pw selector/action is recoverable inside the same task browser; retry with a better selector instead of starting another task. prefer cg use for multi-operation work because it keeps a hot recorded Playwright CLI session attached",
-    "segmentJournalRule": "active fallback segments write events.jsonl; cartographer pw commands are fallback evidence, acquired CLI commands run with the same taskId are journaled as non-promotable context",
+    "fallbackSessionRule": "a failed shell or cg pw selector/action is recoverable inside the same task browser; retry with a better selector instead of starting another task. prefer cg use for multi-operation work because it keeps a hot recorded Playwright CLI session attached",
+    "segmentJournalRule": "active fallback segments write events.jsonl; cg pw commands are fallback evidence, acquired CLI commands run with the same taskId are journaled as non-promotable context",
     "promotionEligibilityRule": "review may use all journal events as context, but promotion ignores events with promotionEligible:false",
     "promotionReplayRule": "apply-promotion-decision replays non-write/no-arg promotions in the task browser before catalog mutation; write-capable promotions are not auto-replayed",
-    "scriptedFallbackRule": "recorded fallback uses shell commands or cartographer pw <playwright-cli-command>; review-task materializes active pw journals into fallback tapes",
+    "scriptedFallbackRule": "recorded fallback uses shell commands or cg pw <playwright-cli-command>; review-task materializes active pw journals into fallback tapes",
+    "finalReportRule": "after live work, final response must include taskId, fallback used, review status, acquisition scorecard quality, promoted commands, rejected candidates, and rerecord candidates; use unknown only when the artifact is genuinely unavailable",
     "stateScopeRule": "commands may declare stateScope; Cartographer checks preconditions before execution and returns precondition_failed with suggestedAutoEnterProcessName/fallbackRecommended when unmet",
     "supportedPlaywrightSelectors": [
       "e15",
       "testid=\"...\"",
       "role=button[name=\"...\"]",
+      "role=button[name=/.../]",
       "label=\"...\"",
       "placeholder=\"...\"",
       "title=\"...\"",
@@ -31,7 +33,7 @@
   },
   "taskLifecycle": {
     "beginTaskCommand": "cg begin-task instagram --intent <task>",
-    "taskFileRule": "begin-task persists task.json immediately; cartographer pw --task-id appends segment.json files under that task",
+    "taskFileRule": "begin-task persists task.json immediately; cg pw --task-id appends segment.json files under that task",
     "fallbackCreatesLearningDebt": true,
     "closeoutRequiredWhenFallbackUsed": true,
     "completeTaskCommand": "cg complete-task instagram --task-id <taskId>",
@@ -42,7 +44,8 @@
     "decisions": [
       "promote",
       "reject",
-      "delete"
+      "delete",
+      "rerecord"
     ],
     "promotionCriteria": [
       "generic",
@@ -64,7 +67,8 @@
         "stateScope.autoEnterProcessName must point to an existing non-write command",
         "runtime placeholders must have declared args",
         "output contracts must have valid names, selectors, and descriptions",
-        "if duplicate candidates are surfaced, promotion requires explicit duplicateJudgment"
+        "if duplicate candidates are surfaced, promotion requires explicit duplicateJudgment",
+        "rerecord decisions never mutate catalog or generated skill contracts"
       ],
       "advisory": [
         "the agent is responsible for deciding whether the tape is semantically generic and reusable",
@@ -75,17 +79,19 @@
         "prefer selector-backed textual outputs over screenshots for read/evidence commands",
         "non-write commands without outputs are navigation/state commands only",
         "state-scoped commands should expose the narrow state they require; global commands should omit stateScope",
-        "prefer rejecting a broad task fallback and promoting only a smaller reusable sub-operation"
+        "prefer rejecting a broad task fallback and promoting only a smaller reusable sub-operation",
+        "valuable write candidates with weak selectors should be marked for rerecord instead of promoted"
       ]
     },
     "promotionDecisionWorkflow": {
       "createReviewCommand": "cg create-promotion-review instagram <fallback-id>",
       "applyDecisionCommand": "cg apply-promotion-decision instagram --decision-file <decision.json>",
-      "agentInstruction": "For task review, reason over review-request.json, start from decision-template.json, and return one PromotionBatchDecision JSON. Decide promotion-ready slices independently before rejecting the remaining whole fallback.",
+      "agentInstruction": "For task review, reason over review-request.json, start from decision-template.json, handle acquisition obligations first, rate candidates with agentEasyToPromote, and return one PromotionBatchDecision JSON. Decide promotion-ready slices independently before rejecting the remaining whole fallback.",
       "decisionActions": [
         "promote",
         "reject",
-        "delete"
+        "delete",
+        "rerecord"
       ],
       "afterPromotion": "Treat agentContractDelta from the apply result as an immediate patch to the working command contract. Use reusableCommand.command, or refresh SKILL.md/manifest.json, to reuse the acquired CLI skill."
     }
@@ -93,18 +99,305 @@
   "cli": {
     "binName": "instagram-com-cli",
     "cliPath": "/Users/varad/.cartographer/bin/instagram-com-cli",
+    "cartographerCli": "cg",
+    "cgPath": "/Users/varad/.cartographer/bin/cg",
+    "binDirOnPath": true,
     "shellCommand": "cg use instagram --task \"<task>\"",
     "scriptedShellCommand": "cg use instagram --task \"<task>\" < commands.txt",
     "execCommandPattern": "cg exec-command instagram <command> [--task-id <taskId>] [--auto-chain] [--dry-run] [--confirm-write] [--key value]",
     "commandPattern": "/Users/varad/.cartographer/bin/instagram-com-cli <command> [--task-id <taskId>] [--dry-run] [--confirm-write] [--key value]",
     "fallbackCommand": "cg pw instagram --task-id <taskId> --intent <segment> snapshot",
     "scriptedFallbackCommand": "cg pw instagram --task-id <taskId> goto https://www.instagram.com/direct/inbox/",
+    "doctorCommand": "cg doctor instagram --task-id <taskId>",
     "planCommand": "cg plan instagram <processName>",
     "taskReviewCommand": "cg review-task instagram --task-id <taskId>",
     "completeTaskCommand": "cg complete-task instagram --task-id <taskId>",
     "taskSummaryCommand": "cg task-summary instagram --task-id <taskId>",
     "reviewCommand": "cg review-task instagram --task-id <taskId>",
-    "cleanupCommand": "cg cleanup-recordings instagram --confirm-delete"
+    "cleanupCommand": "cg cleanup-recordings instagram --confirm-delete",
+    "analyzeSiteCommand": "cg analyze-site instagram",
+    "siteSummaryCommand": "cg site-summary instagram",
+    "siteNodeCommand": "cg site-node instagram <node-id>",
+    "siteActionsCommand": "cg site-actions instagram <node-id>"
   },
-  "commands": []
+  "commands": [
+    {
+      "name": "open-inbox",
+      "processName": "open_inbox",
+      "description": "Open the Instagram direct messages inbox.",
+      "writesToPlatform": false,
+      "args": [],
+      "outputs": [],
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/direct/inbox"
+        }
+      ],
+      "success": {
+        "actionFailuresFailCommand": true,
+        "postconditionsMustPass": true,
+        "driftOnlyFailsCommand": false
+      },
+      "failureFields": [
+        "failure",
+        "preconditions.checks",
+        "execution.actionFailures",
+        "postconditions.checks",
+        "drift.steps"
+      ]
+    },
+    {
+      "name": "open-notifications",
+      "processName": "open_notifications",
+      "description": "Open the Instagram notifications panel from the current authenticated page.",
+      "writesToPlatform": false,
+      "args": [],
+      "outputs": [],
+      "postconditions": [
+        {
+          "type": "text_contains",
+          "selector": "body",
+          "value": "Notifications"
+        }
+      ],
+      "success": {
+        "actionFailuresFailCommand": true,
+        "postconditionsMustPass": true,
+        "driftOnlyFailsCommand": false
+      },
+      "failureFields": [
+        "failure",
+        "preconditions.checks",
+        "execution.actionFailures",
+        "postconditions.checks",
+        "drift.steps"
+      ]
+    },
+    {
+      "name": "open-profile-by-username",
+      "processName": "open_profile_by_username",
+      "description": "Open an Instagram profile by username.",
+      "writesToPlatform": false,
+      "args": [
+        {
+          "name": "username",
+          "required": true,
+          "description": "Instagram username without @."
+        }
+      ],
+      "outputs": [],
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/%username%/"
+        }
+      ],
+      "success": {
+        "actionFailuresFailCommand": true,
+        "postconditionsMustPass": true,
+        "driftOnlyFailsCommand": false
+      },
+      "failureFields": [
+        "failure",
+        "preconditions.checks",
+        "execution.actionFailures",
+        "postconditions.checks",
+        "drift.steps"
+      ]
+    },
+    {
+      "name": "open-thread-by-name",
+      "processName": "open_thread_by_name",
+      "description": "Search Instagram direct messages and open a matching direct-message thread or account result by visible name.",
+      "writesToPlatform": false,
+      "args": [
+        {
+          "name": "threadName",
+          "required": true,
+          "description": "Visible thread/account name to search for in Instagram messages."
+        }
+      ],
+      "outputs": [],
+      "stateScope": {
+        "preconditions": [
+          {
+            "type": "url_contains",
+            "value": "/direct/inbox"
+          }
+        ],
+        "autoEnterProcessName": "open_inbox",
+        "onUnmetPrecondition": "fallback"
+      },
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/direct/t/"
+        },
+        {
+          "type": "scoped_text_contains",
+          "selectors": [
+            "header"
+          ],
+          "value": "%threadName%"
+        }
+      ],
+      "success": {
+        "actionFailuresFailCommand": true,
+        "postconditionsMustPass": true,
+        "driftOnlyFailsCommand": false
+      },
+      "failureFields": [
+        "failure",
+        "preconditions.checks",
+        "execution.actionFailures",
+        "postconditions.checks",
+        "drift.steps"
+      ]
+    },
+    {
+      "name": "read-current-notifications-summary",
+      "processName": "read_current_notifications_summary",
+      "description": "Read the visible text from the currently open Instagram notifications panel.",
+      "writesToPlatform": false,
+      "args": [],
+      "outputs": [
+        {
+          "name": "notificationRows",
+          "source": "text",
+          "selector": "body",
+          "description": "Structured notification activity rows from the currently open Instagram notifications panel, joining actor names with visible activity text.",
+          "transform": {
+            "type": "notification_rows",
+            "limit": 20
+          }
+        }
+      ],
+      "stateScope": {
+        "preconditions": [
+          {
+            "type": "text_contains",
+            "selector": "body",
+            "value": "Notifications"
+          }
+        ],
+        "autoEnterProcessName": "open_notifications",
+        "onUnmetPrecondition": "suggest_chain"
+      },
+      "postconditions": [
+        {
+          "type": "text_contains",
+          "selector": "body",
+          "value": "Notifications"
+        }
+      ],
+      "success": {
+        "actionFailuresFailCommand": true,
+        "postconditionsMustPass": true,
+        "driftOnlyFailsCommand": false
+      },
+      "failureFields": [
+        "failure",
+        "preconditions.checks",
+        "execution.actionFailures",
+        "postconditions.checks",
+        "drift.steps"
+      ]
+    },
+    {
+      "name": "read-current-profile-summary",
+      "processName": "read_current_profile_summary",
+      "description": "Read the visible summary text from the currently open Instagram profile page.",
+      "writesToPlatform": false,
+      "args": [],
+      "outputs": [
+        {
+          "name": "profileText",
+          "source": "text",
+          "selector": "main",
+          "description": "Visible profile header, counts, bio, highlights, and top post captions from the current profile page."
+        }
+      ],
+      "stateScope": {
+        "preconditions": [
+          {
+            "type": "selector_exists",
+            "selector": "main"
+          }
+        ],
+        "onUnmetPrecondition": "fallback"
+      },
+      "postconditions": [
+        {
+          "type": "selector_exists",
+          "selector": "main"
+        }
+      ],
+      "success": {
+        "actionFailuresFailCommand": true,
+        "postconditionsMustPass": true,
+        "driftOnlyFailsCommand": false
+      },
+      "failureFields": [
+        "failure",
+        "preconditions.checks",
+        "execution.actionFailures",
+        "postconditions.checks",
+        "drift.steps"
+      ]
+    },
+    {
+      "name": "send-message-current-thread",
+      "processName": "send_message_current_thread",
+      "description": "Send a text message in the currently open Instagram direct-message thread.",
+      "writesToPlatform": true,
+      "args": [
+        {
+          "name": "message",
+          "required": true,
+          "description": "Message text to send in the current thread."
+        }
+      ],
+      "outputs": [],
+      "stateScope": {
+        "preconditions": [
+          {
+            "type": "url_contains",
+            "value": "/direct/t/"
+          }
+        ],
+        "autoEnterProcessName": "open_thread_by_name",
+        "onUnmetPrecondition": "fallback"
+      },
+      "postconditions": [
+        {
+          "type": "url_contains",
+          "value": "/direct/t/"
+        },
+        {
+          "type": "rendered_text_contains",
+          "selector": "main",
+          "value": "%message%",
+          "excludeSelectors": [
+            "[contenteditable='true']",
+            "textarea",
+            "input",
+            "[role=\"textbox\"]"
+          ]
+        }
+      ],
+      "success": {
+        "actionFailuresFailCommand": true,
+        "postconditionsMustPass": true,
+        "driftOnlyFailsCommand": false
+      },
+      "failureFields": [
+        "failure",
+        "preconditions.checks",
+        "execution.actionFailures",
+        "postconditions.checks",
+        "drift.steps"
+      ]
+    }
+  ]
 }

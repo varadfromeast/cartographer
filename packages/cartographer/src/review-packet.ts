@@ -6,7 +6,9 @@ import type {
   EvidencePreview,
   FallbackReviewPacket,
   FallbackTape,
+  CompiledFallbackReview,
 } from "./contracts.js";
+import { compileFallbackAcquisitionReview } from "./acquisition-review-compiler.js";
 import { createFallbackPromotionSummary } from "./fallback-summary.js";
 import {
   fallbackDecisionTemplatePath,
@@ -34,6 +36,14 @@ export async function createFallbackReviewPacket(
     writesToPlatform: tape.writesToPlatform,
     args: tape.args,
     evidence: tape.evidence,
+    visualReviews: [
+      ...(tape.visualReviews || []),
+      ...(tape.operations || [])
+        .map((operation) => operation.visualReview)
+        .filter((review): review is NonNullable<typeof review> =>
+          Boolean(review),
+        ),
+    ],
     evidencePreview,
     reviewPath: fallbackReviewPath(domain, tape.id),
     reviewRequestPath: fallbackReviewRequestPath(domain, tape.id),
@@ -49,15 +59,21 @@ export async function writeFallbackReviewMarkdown(
   tape: FallbackTape,
 ): Promise<string> {
   const packet = await createFallbackReviewPacket(domain, tape);
+  const acquisition = await compileFallbackAcquisitionReview({ tape });
   const outputPath = fallbackReviewPath(domain, tape.id);
   await ensureDir(path.dirname(outputPath));
-  await fs.writeFile(outputPath, renderFallbackReview(packet, tape), "utf8");
+  await fs.writeFile(
+    outputPath,
+    renderFallbackReview(packet, tape, acquisition),
+    "utf8",
+  );
   return outputPath;
 }
 
 function renderFallbackReview(
   packet: FallbackReviewPacket,
   tape: FallbackTape,
+  acquisition: CompiledFallbackReview,
 ): string {
   const summary = createFallbackPromotionSummary(tape, packet.evidencePreview);
   const lines = [
@@ -117,6 +133,49 @@ function renderFallbackReview(
       `- Text evidence selectors: ${summary.mechanicalHints.textEvidenceSelectors.join(", ")}`,
     );
   }
+  if (summary.visualReviews.length) {
+    lines.push("- Visual reviews:");
+    for (const review of summary.visualReviews) {
+      lines.push(
+        `  - ${review.id}: ${review.status}${review.result ? ` verdict=${review.result.verdict}` : ""} screenshot=${review.source.screenshotPath}`,
+      );
+      lines.push(`    question: ${review.question}`);
+    }
+  }
+
+  lines.push("", "## Acquisition Scorecard", "");
+  lines.push(`- Quality: ${acquisition.scorecard.acquisitionQuality}`);
+  lines.push(
+    `- Harness easy to promote: ${acquisition.scorecard.easyToPromote}`,
+  );
+  lines.push(`- Candidates: ${acquisition.scorecard.candidateCount}`);
+  lines.push(
+    `- High-value candidates: ${acquisition.scorecard.highValueCandidateCount}`,
+  );
+  lines.push(`- Obligations: ${acquisition.scorecard.obligationCount}`);
+  lines.push(`- Reasoning: ${acquisition.scorecard.reasoning}`);
+
+  if (acquisition.obligations.length) {
+    lines.push("", "## Acquisition Obligations", "");
+    for (const obligation of acquisition.obligations) {
+      lines.push(
+        `- ${obligation.severity} ${obligation.code}: ${obligation.message}`,
+      );
+    }
+  }
+
+  if (acquisition.candidates.length) {
+    lines.push("", "## Acquisition Candidates", "");
+    lines.push(
+      "| Candidate | Kind | Harness Easy | Suggested Command | Risk | Evidence |",
+    );
+    lines.push("|---|---|---|---|---|---|");
+    for (const candidate of acquisition.candidates) {
+      lines.push(
+        `| ${candidate.id} | ${candidate.kind} | ${candidate.harnessEasyToPromote} | ${candidate.suggestedCommandName || "N/A"} | ${(candidate.riskFlags.join(", ") || "none").replace(/\|/g, "\\|")} | ${candidate.evidencePaths.length ? "yes" : "no"} |`,
+      );
+    }
+  }
 
   if (summary.operations.length) {
     lines.push("", "## Operation Log", "");
@@ -140,6 +199,9 @@ function renderFallbackReview(
         operation.evidenceSummaryPath
           ? `summary=${operation.evidenceSummaryPath}`
           : undefined,
+        operation.visualReview
+          ? `visualReview=${operation.visualReview.id}:${operation.visualReview.status}`
+          : undefined,
         operation.stepId ? `step=${operation.stepId.slice(0, 10)}` : undefined,
         operation.writesToPlatform ? "write=true" : undefined,
       ].filter(Boolean);
@@ -162,6 +224,19 @@ function renderFallbackReview(
         lines.push(
           `   - evidence warnings: ${operation.evidenceSummary.warnings.join(", ")}`,
         );
+      }
+      if (operation.writeGrounding) {
+        lines.push(
+          `   - write grounding: ${operation.writeGrounding.promotionReady ? "promotion-ready" : "rerecord-needed"}${operation.writeGrounding.recommendedSelector ? ` selector=${operation.writeGrounding.recommendedSelector}` : ""}`,
+        );
+        for (const candidate of operation.writeGrounding.candidates.slice(
+          0,
+          3,
+        )) {
+          lines.push(
+            `     - score ${candidate.score}: ${candidate.selector} (${candidate.reasons.concat(candidate.penalties).join("; ")})`,
+          );
+        }
       }
       if (operation.evidencePaths) {
         for (const [label, evidencePath] of Object.entries(

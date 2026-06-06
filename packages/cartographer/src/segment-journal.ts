@@ -62,6 +62,7 @@ export async function appendCliOperationToActiveSegment(input: {
     failureReason: input.result.success
       ? undefined
       : input.result.failure?.reason || input.result.message,
+    visualReview: input.result.visualReview,
     writesToPlatform: input.writesToPlatform,
     createdAt,
   };

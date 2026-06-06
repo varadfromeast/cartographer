@@ -1,5 +1,5 @@
-import type { Action } from "@browserbasehq/stagehand";
 import type {
+  Action,
   BrowserSession,
   ProcessArg,
   ProcessTape,
@@ -29,7 +29,9 @@ export async function recordScriptedInstagramDm(
   options: ScriptedInstagramDmOptions,
 ): Promise<ProcessTape> {
   if (!options.confirmWrite) {
-    throw new Error("Refusing to run Instagram DM script without --confirm-write");
+    throw new Error(
+      "Refusing to run Instagram DM script without --confirm-write",
+    );
   }
   if (options.recipient !== "va_rad_") {
     throw new Error("V1 safety gate only allows DM recipient va_rad_.");
@@ -38,7 +40,9 @@ export async function recordScriptedInstagramDm(
   const steps: TapeStep[] = [];
   if (!options.assumeLoggedIn) {
     if (!options.username || !options.password) {
-      throw new Error("username/password are required unless assumeLoggedIn is true.");
+      throw new Error(
+        "username/password are required unless assumeLoggedIn is true.",
+      );
     }
     await session.goto("https://www.instagram.com/");
     await delay(2500);
@@ -80,7 +84,8 @@ export async function recordScriptedInstagramDm(
         name: "submit_login",
         instruction: "submit Instagram login",
         action: {
-          selector: "//*[normalize-space()='Log in' and (self::div or self::span or self::button)]",
+          selector:
+            "//*[normalize-space()='Log in' and (self::div or self::span or self::button)]",
           method: "click",
           description: "click login submit button",
           arguments: [],
@@ -90,7 +95,9 @@ export async function recordScriptedInstagramDm(
       }),
     );
 
-    await session.waitForUser("Complete any Instagram login challenge or 2FA if shown.");
+    await session.waitForUser(
+      "Complete any Instagram login challenge or 2FA if shown.",
+    );
   }
 
   await session.goto(`https://www.instagram.com/${options.recipient}/`);
@@ -133,8 +140,7 @@ export async function recordScriptedInstagramDm(
       name: "fill_dm_message",
       instruction: "fill Instagram DM message",
       action: {
-        selector:
-          "div[contenteditable='true']",
+        selector: "div[contenteditable='true']",
         method: "fill",
         description: "fill the direct message composer",
         arguments: ["%message%"],
@@ -149,7 +155,8 @@ export async function recordScriptedInstagramDm(
       name: "send_dm",
       instruction: "send Instagram DM",
       action: {
-        selector: "//*[normalize-space()='Send' and (self::div or self::span or self::button)]",
+        selector:
+          "//*[normalize-space()='Send' and (self::div or self::span or self::button)]",
         method: "click",
         description: "click Send in the direct message composer",
         arguments: [],
@@ -169,7 +176,9 @@ export async function recordScriptedInstagramDm(
     entry: steps[0].before,
     steps,
     args,
-    postconditions: [{ type: "text_contains", selector: "body", value: "%message%" }],
+    postconditions: [
+      { type: "text_contains", selector: "body", value: "%message%" },
+    ],
     writesToPlatform: true,
     createdAt: now,
     updatedAt: now,
@@ -195,7 +204,10 @@ async function runStep(
   const atom = actionToAtom(input.action, input.instruction, session.domain);
   const outcome = await session.actRaw(input.action, input.args);
   if (!outcome.success) {
-    if (input.optionalIfMissing && /could not find an element/i.test(outcome.message)) {
+    if (
+      input.optionalIfMissing &&
+      /could not find an element/i.test(outcome.message)
+    ) {
       return null;
     }
     throw new Error(`Step ${input.name} failed: ${outcome.message}`);
@@ -211,7 +223,10 @@ async function runStep(
       at: now,
     }),
     name: input.name,
-    type: input.action.method === "fill" || input.action.method === "type" ? "fill" : "click",
+    type:
+      input.action.method === "fill" || input.action.method === "type"
+        ? "fill"
+        : "click",
     before,
     after,
     atomId: atom.id,

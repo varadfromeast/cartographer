@@ -8,8 +8,8 @@ import {
   type BrowserContext,
   type Page,
 } from "playwright";
-import type { Action } from "@browserbasehq/stagehand";
 import type {
+  Action,
   ActOutcome,
   BrowserSession,
   BrowserSessionFactory,
@@ -23,14 +23,22 @@ import { browserProfileDir, browserSessionPath } from "./paths.js";
 import { locatorForSelector } from "./playwright-selector.js";
 import { waitForLoginIfNeeded } from "./login-wait.js";
 import { getSiteConfig } from "./site-config.js";
+import { cartographerBrowserExecutablePath } from "./browser-provider.js";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
-interface TaskBrowserRecord {
+export interface TaskBrowserLease {
+  taskId: TaskId;
+  ownerPid: number;
+  updatedAt: string;
+}
+
+export interface TaskBrowserRecord {
   schemaVersion: 1;
   domain: Domain;
   profile: string;
   activeTaskIds: TaskId[];
+  activeTaskLeases?: TaskBrowserLease[];
   pid: number;
   port: number;
   cdpUrl: string;
@@ -38,9 +46,11 @@ interface TaskBrowserRecord {
   updatedAt: string;
 }
 
+const TASK_LEASE_STALE_MS = 6 * 60 * 60 * 1000;
+
 export class TaskScopedBrowserSessionFactory implements BrowserSessionFactory {
   constructor(
-    private readonly fallbackFactory = new StagehandlessBrowserSessionFactory(),
+    private readonly fallbackFactory = new PlaywrightBrowserSessionFactory(),
   ) {}
 
   async launch(
@@ -49,7 +59,11 @@ export class TaskScopedBrowserSessionFactory implements BrowserSessionFactory {
   ): Promise<BrowserSession> {
     const site = getSiteConfig(domain);
     if (!options.taskId) return this.fallbackFactory.launch(domain, options);
-    const connection = await connectOrStartTaskBrowser(domain, options.taskId);
+    const connection = await connectOrStartTaskBrowser(
+      domain,
+      options.taskId,
+      options.profile,
+    );
     const session = new PlaywrightBrowserSession(domain, connection, false);
     await waitForLoginIfNeeded(session, site.loginWaitLabel);
     return session;
@@ -60,20 +74,16 @@ export class TaskScopedBrowserSessionFactory implements BrowserSessionFactory {
   }
 }
 
-export class StagehandlessBrowserSessionFactory
-  implements BrowserSessionFactory
-{
+export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
   async launch(
     domain: Domain,
     options: LaunchOptions,
   ): Promise<BrowserSession> {
     const site = getSiteConfig(domain);
-    const profileDir = browserProfilePath(domain);
+    const profileDir = browserProfilePath(domain, options.profile);
     await ensureDir(profileDir);
     const context = await chromium.launchPersistentContext(profileDir, {
-      executablePath:
-        process.env.CARTOGRAPHER_CHROME_PATH ||
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      executablePath: cartographerBrowserExecutablePath(),
       headless: options.headless,
       viewport: options.viewport,
     });
@@ -98,57 +108,79 @@ export class StagehandlessBrowserSessionFactory
 export async function connectOrStartTaskBrowser(
   domain: Domain,
   taskId: TaskId,
+  profile = "default",
 ): Promise<{
   browser?: Browser;
   context: BrowserContext;
   page: Page;
   cdpUrl: string;
 }> {
-  const profile = "default";
   const existing = await readJsonFile<TaskBrowserRecord>(
     browserSessionPath(domain, profile),
   );
   if (existing && (await isCdpAlive(existing.cdpUrl))) {
+    const normalized = normalizeTaskBrowserRecord(existing);
     await writeJsonFile(
       browserSessionPath(domain, profile),
-      withTaskLease(existing, taskId),
+      withTaskLease(normalized, taskId),
     );
-    return connectTaskBrowser(existing.cdpUrl);
+    try {
+      return await connectTaskBrowser(existing.cdpUrl);
+    } catch {
+      terminatePid(existing.pid);
+      await fs.rm(browserSessionPath(domain, profile), { force: true });
+    }
   }
 
-  const port = await reservePort();
-  const cdpUrl = `http://127.0.0.1:${port}`;
-  const profileDir = browserProfilePath(domain, profile);
-  await ensureDir(profileDir);
-  await ensureDir(path.dirname(browserSessionPath(domain, profile)));
-  const child = spawn(
-    process.env.CARTOGRAPHER_CHROME_PATH ||
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    [
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${profileDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      getSiteConfig(domain).baseUrl,
-    ],
-    { detached: true, stdio: "ignore" },
-  );
-  child.unref();
+  const recordPath = browserSessionPath(domain, profile);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const port = await reservePort();
+    const cdpUrl = `http://127.0.0.1:${port}`;
+    const profileDir = browserProfilePath(domain, profile);
+    await ensureDir(profileDir);
+    await ensureDir(path.dirname(recordPath));
+    const child = spawn(
+      cartographerBrowserExecutablePath(),
+      [
+        `--remote-debugging-port=${port}`,
+        `--user-data-dir=${profileDir}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+        getSiteConfig(domain).baseUrl,
+      ],
+      { detached: true, stdio: "ignore" },
+    );
+    child.unref();
 
-  const record: TaskBrowserRecord = {
-    schemaVersion: 1,
-    domain,
-    profile,
-    activeTaskIds: [taskId],
-    pid: child.pid || 0,
-    port,
-    cdpUrl,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  await writeJsonFile(browserSessionPath(domain, profile), record);
-  await waitForCdp(cdpUrl);
-  return connectTaskBrowser(cdpUrl);
+    const record: TaskBrowserRecord = {
+      schemaVersion: 1,
+      domain,
+      profile,
+      activeTaskIds: [taskId],
+      activeTaskLeases: [
+        {
+          taskId,
+          ownerPid: process.pid,
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      pid: child.pid || 0,
+      port,
+      cdpUrl,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonFile(recordPath, record);
+    try {
+      await waitForCdp(cdpUrl);
+      return await connectTaskBrowser(cdpUrl);
+    } catch (error) {
+      terminatePid(record.pid);
+      await fs.rm(recordPath, { force: true });
+      if (attempt === 1) throw error;
+    }
+  }
+  throw new Error("Task browser startup retry exhausted.");
 }
 
 function browserProfilePath(domain: Domain, profile = "default"): string {
@@ -161,24 +193,38 @@ function browserProfilePath(domain: Domain, profile = "default"): string {
 export async function closeTaskBrowser(
   domain: Domain,
   taskId: TaskId,
+  profile = "default",
+  options: { keepBrowserOpen?: boolean } = {},
 ): Promise<{
   closed: boolean;
   recordPath: string;
   remainingTaskIds?: TaskId[];
 }> {
-  const recordPath = browserSessionPath(domain);
+  const recordPath = browserSessionPath(domain, profile);
   const record = await readJsonFile<TaskBrowserRecord>(recordPath);
   if (!record) return { closed: false, recordPath };
-  const remainingTaskIds = (record.activeTaskIds || []).filter(
-    (candidate) => candidate !== taskId,
+  const normalized = normalizeTaskBrowserRecord(record);
+  const remainingLeases = (normalized.activeTaskLeases || []).filter(
+    (lease) => lease.taskId !== taskId,
   );
+  const remainingTaskIds = remainingLeases.map((lease) => lease.taskId);
   if (remainingTaskIds.length) {
     await writeJsonFile(recordPath, {
-      ...record,
+      ...normalized,
       activeTaskIds: remainingTaskIds,
+      activeTaskLeases: remainingLeases,
       updatedAt: new Date().toISOString(),
     });
     return { closed: false, recordPath, remainingTaskIds };
+  }
+  if (options.keepBrowserOpen) {
+    await writeJsonFile(recordPath, {
+      ...normalized,
+      activeTaskIds: [],
+      activeTaskLeases: [],
+      updatedAt: new Date().toISOString(),
+    });
+    return { closed: false, recordPath, remainingTaskIds: [] };
   }
   try {
     const browser = await chromium.connectOverCDP(record.cdpUrl);
@@ -195,11 +241,42 @@ function withTaskLease(
   record: TaskBrowserRecord,
   taskId: TaskId,
 ): TaskBrowserRecord {
+  const updatedAt = new Date().toISOString();
+  const leases = [
+    ...(record.activeTaskLeases || []).filter(
+      (lease) => lease.taskId !== taskId,
+    ),
+    { taskId, ownerPid: process.pid, updatedAt },
+  ];
   return {
     ...record,
-    activeTaskIds: [...new Set([...(record.activeTaskIds || []), taskId])],
-    updatedAt: new Date().toISOString(),
+    activeTaskIds: leases.map((lease) => lease.taskId),
+    activeTaskLeases: leases,
+    updatedAt,
   };
+}
+
+export function normalizeTaskBrowserRecord(
+  record: TaskBrowserRecord,
+): TaskBrowserRecord {
+  const activeTaskLeases = (record.activeTaskLeases || []).filter((lease) =>
+    isTaskLeaseAlive(lease),
+  );
+  return {
+    ...record,
+    activeTaskIds: activeTaskLeases.map((lease) => lease.taskId),
+    activeTaskLeases,
+  };
+}
+
+export function activeTaskIdsFor(record?: TaskBrowserRecord): TaskId[] {
+  return record ? normalizeTaskBrowserRecord(record).activeTaskIds : [];
+}
+
+function isTaskLeaseAlive(lease: TaskBrowserLease): boolean {
+  if (Date.now() - Date.parse(lease.updatedAt) > TASK_LEASE_STALE_MS)
+    return false;
+  return isPidAlive(lease.ownerPid);
 }
 
 function isPidAlive(pid: number): boolean {
@@ -305,8 +382,24 @@ class PlaywrightBrowserSession implements BrowserSession {
     try {
       if (action.method === "click") {
         await locator.click();
+      } else if (action.method === "dblclick") {
+        await requireLocatorMethod(locator, "dblclick")();
+      } else if (action.method === "hover") {
+        await requireLocatorMethod(locator, "hover")();
       } else if (action.method === "fill") {
         await locator.fill(args[0] || "");
+      } else if (action.method === "type") {
+        await requireLocatorMethod(locator, "type")(args[0] || "");
+      } else if (action.method === "press") {
+        await requireLocatorMethod(locator, "press")(args[0] || "");
+      } else if (action.method === "check") {
+        await requireLocatorMethod(locator, "check")();
+      } else if (action.method === "uncheck") {
+        await requireLocatorMethod(locator, "uncheck")();
+      } else if (action.method === "select") {
+        await requireLocatorMethod(locator, "selectOption")(args);
+      } else if (action.method === "upload") {
+        await requireLocatorMethod(locator, "setInputFiles")(args);
       } else if (action.method === "goto") {
         await this.goto(action.selector);
       } else {
@@ -338,6 +431,41 @@ class PlaywrightBrowserSession implements BrowserSession {
 
   async readText(selector = "body"): Promise<string> {
     return await locatorForSelector(this.connection.page, selector).innerText();
+  }
+
+  async readTextExcluding(
+    selector: string,
+    excludeSelectors: string[],
+  ): Promise<string> {
+    return await locatorForSelector(this.connection.page, selector).evaluateAll(
+      (elements, excludes) => {
+        const shouldSkip = (element: Element): boolean =>
+          excludes.some((exclude) => {
+            try {
+              return (
+                element.matches(exclude) || Boolean(element.closest(exclude))
+              );
+            } catch {
+              return false;
+            }
+          });
+        const textFrom = (node: Node): string => {
+          if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
+          if (!(node instanceof Element)) return "";
+          if (shouldSkip(node)) return "";
+          if (
+            node instanceof HTMLInputElement ||
+            node instanceof HTMLTextAreaElement ||
+            node instanceof HTMLSelectElement
+          ) {
+            return "";
+          }
+          return Array.from(node.childNodes).map(textFrom).join(" ");
+        };
+        return elements.map(textFrom).join(" ").replace(/\s+/g, " ").trim();
+      },
+      excludeSelectors,
+    );
   }
 
   async isVisible(selector: string): Promise<boolean> {
@@ -398,6 +526,19 @@ class PlaywrightBrowserSession implements BrowserSession {
     }
     disconnectBrowserClient(this.connection.browser);
   }
+}
+
+function requireLocatorMethod<T extends (...args: any[]) => Promise<any>>(
+  locator: unknown,
+  method: string,
+): T {
+  const fn = (locator as Record<string, unknown>)[method];
+  if (typeof fn !== "function") {
+    throw new Error(
+      `Playwright locator replay does not support method: ${method}`,
+    );
+  }
+  return fn.bind(locator) as T;
 }
 
 function disconnectBrowserClient(browser: Browser | undefined): void {

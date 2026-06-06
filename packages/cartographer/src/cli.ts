@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { StagehandBrowserSessionFactory } from "./browser-session.js";
+import { PlaywrightBrowserSessionFactory } from "./browser-session.js";
 import { NodeCliEmitter } from "./cli-emitter.js";
 import type {
   Domain,
@@ -21,11 +22,13 @@ import { JsonTapeStore } from "./tape-store.js";
 import { ProcessTapeRecorder } from "./manual-recorder.js";
 import {
   binDir,
+  browserSessionPath,
   cartographerHome,
   catalogPath,
   manifestPath,
   recordingDirs,
   siteDir,
+  surfacePacketIndexPath,
   skillPath,
   slugifyName,
   tapeDir,
@@ -56,6 +59,47 @@ import {
   runRecordedPlaywrightCli,
 } from "./playwright-cli-adapter.js";
 import { materializeRecordingSegments } from "./pw-segment-materializer.js";
+import { evaluateFallbackAcquisition } from "./acquisition-eval.js";
+import type { SiteGraph, SiteGraphAction } from "./site-graph.js";
+import { analyzeSiteGraph, loadSiteGraph } from "./site-graph.js";
+import {
+  currentLiveSurfacePacket,
+  loadSurfacePacket,
+  loadSurfacePacketIndex,
+} from "./surface-packet.js";
+import { runExplorationCaptureHarness } from "./explorer/harness.js";
+import type { ExplorationGoalName } from "./explorer/harness-contracts.js";
+import {
+  summarizeExplorationRun,
+  verifyExplorationRun,
+} from "./explorer/verification.js";
+import { checkSavedSessionStatus } from "./explorer/session-status.js";
+import {
+  inspectExplorationActions,
+  inspectExplorationNode,
+  findExplorationPath,
+  executeExplorationAction,
+  openExplorationAction,
+  openExplorationNode,
+  runExplorationChain,
+  summarizeExplorationGraph,
+  summarizeExplorationProgress,
+} from "./explorer/graph-cli.js";
+import { createExplorationTopologyArtifact } from "./explorer/topology.js";
+import { latestExplorationRunDir } from "./explorer/topology.js";
+import { writeExplorationVisualization } from "./explorer/visualization.js";
+import { writeExplorationAgentContract } from "./explorer/agent-contract.js";
+import {
+  runExplorationAgentEval,
+  writeExplorationHandoffBundle,
+} from "./explorer/acceptance-gate.js";
+import {
+  findGraphDbPath,
+  importExplorationRunToGraphDb,
+  inspectGraphDbActions,
+  searchGraphDb,
+  summarizeGraphDb,
+} from "./explorer/sqlite-graph.js";
 
 async function main(): Promise<void> {
   const cliArgs = process.argv
@@ -70,6 +114,353 @@ async function main(): Promise<void> {
 
   if (command === "teach" && args[0] === "instagram") {
     await teachInstagram();
+    return;
+  }
+
+  if (command === "graph") {
+    await runGraphCommand(args);
+    return;
+  }
+
+  if (command === "explore-harness") {
+    const domain = parseExplorationDomain(args[0]);
+    const parsed = parseRuntimeArgs(args.slice(1));
+    const maxDepth = Number(parsed.args.maxDepth || parsed.args.depth || 1);
+    const maxNavigationEdgesPerSurface = parsed.args.maxEdges
+      ? Number(parsed.args.maxEdges)
+      : parsed.args.maxNavigationEdgesPerSurface
+        ? Number(parsed.args.maxNavigationEdgesPerSurface)
+        : undefined;
+    const maxCaptures = parsed.args.maxCaptures
+      ? Number(parsed.args.maxCaptures)
+      : undefined;
+    const taskId = parsed.args.taskId ? String(parsed.args.taskId) : undefined;
+    const profile = parsed.args.profile
+      ? String(parsed.args.profile)
+      : undefined;
+    const resumeRunDir =
+      parsed.args.resume === undefined
+        ? undefined
+        : parsed.args.resume === true
+          ? "latest"
+          : String(parsed.args.resume);
+    const goal = parsed.args.goal
+      ? parseExplorationGoal(String(parsed.args.goal))
+      : undefined;
+    const result = await runExplorationCaptureHarness({
+      domain,
+      maxDepth: Number.isFinite(maxDepth) ? maxDepth : 1,
+      maxNavigationEdgesPerSurface:
+        maxNavigationEdgesPerSurface &&
+        Number.isFinite(maxNavigationEdgesPerSurface)
+          ? maxNavigationEdgesPerSurface
+          : undefined,
+      maxCaptures:
+        maxCaptures && Number.isFinite(maxCaptures) ? maxCaptures : undefined,
+      taskId,
+      goal,
+      profile,
+      resumeRunDir,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "verify-exploration-run") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir =
+      args[1] && args[1] !== "latest" && !args[1].startsWith("--")
+        ? args[1]
+        : undefined;
+    const parsed = parseRuntimeArgs(args.slice(runDir ? 2 : 1));
+    const result = await verifyExplorationRun({
+      domain,
+      runDir,
+      writeArtifact: parsed.args.write === true,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.ok ? 0 : 1);
+    return;
+  }
+
+  if (command === "exploration-handoff-bundle") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir =
+      args[1] && args[1] !== "latest" && !args[1].startsWith("--")
+        ? args[1]
+        : undefined;
+    const result = await writeExplorationHandoffBundle({ domain, runDir });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.ok ? 0 : 1);
+    return;
+  }
+
+  if (command === "exploration-agent-eval") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir =
+      args[1] && args[1] !== "latest" && !args[1].startsWith("--")
+        ? args[1]
+        : undefined;
+    const parsed = parseRuntimeArgs(args.slice(runDir ? 2 : 1));
+    const result = await runExplorationAgentEval({
+      domain,
+      runDir,
+      profile: parsed.args.profile ? String(parsed.args.profile) : undefined,
+      minPathLength: parsed.args.minPathLength
+        ? Number(parsed.args.minPathLength)
+        : undefined,
+      targetCount: parsed.args.targetCount
+        ? Number(parsed.args.targetCount)
+        : undefined,
+      excludeTopLevelNodes: parsed.args.includeTopLevel === true ? false : true,
+      dryRun: parsed.dryRun,
+      writeArtifact: parsed.args.write === true,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.ok ? 0 : 1);
+    return;
+  }
+
+  if (command === "exploration-summary") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir = args[1] && args[1] !== "latest" ? args[1] : undefined;
+    const result = await summarizeExplorationRun({ domain, runDir });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "exploration-graph") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir = args[1] && args[1] !== "latest" ? args[1] : undefined;
+    const result = await summarizeExplorationGraph({ domain, runDir });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "exploration-progress") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir = args[1] && args[1] !== "latest" ? args[1] : undefined;
+    const result = await summarizeExplorationProgress({ domain, runDir });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "exploration-topology") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir =
+      args[1] && args[1] !== "latest" && !args[1].startsWith("--")
+        ? args[1]
+        : undefined;
+    const parsed = parseRuntimeArgs(args.slice(runDir ? 2 : 1));
+    const result = await createExplorationTopologyArtifact({
+      domain,
+      runDir,
+      writeArtifact: parsed.args.write === true,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "exploration-visualize") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir =
+      args[1] && args[1] !== "latest" && !args[1].startsWith("--")
+        ? args[1]
+        : undefined;
+    const result = await writeExplorationVisualization({ domain, runDir });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "exploration-agent-contract") {
+    const domain = parseExplorationDomain(args[0]);
+    const runDir =
+      args[1] && args[1] !== "latest" && !args[1].startsWith("--")
+        ? args[1]
+        : undefined;
+    const result = await writeExplorationAgentContract({ domain, runDir });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "exploration-path") {
+    const domain = parseExplorationDomain(args[0]);
+    const fromNodeId = args[1];
+    const toNodeId = args[2];
+    if (!fromNodeId || !toNodeId) {
+      throw new Error(
+        "Usage: cartographer exploration-path <domain> <from-node-id> <to-node-id> [latest|<run-dir>]",
+      );
+    }
+    const runDir = args[3] && args[3] !== "latest" ? args[3] : undefined;
+    const result = await findExplorationPath({
+      domain,
+      fromNodeId,
+      toNodeId,
+      runDir,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.found ? 0 : 1);
+    return;
+  }
+
+  if (command === "exploration-chain") {
+    const domain = parseExplorationDomain(args[0]);
+    let runDir: string | undefined;
+    let stepStart = 1;
+    const maybeRunDir = args[1];
+    if (maybeRunDir === "latest") {
+      stepStart = 2;
+    } else if (
+      maybeRunDir &&
+      !maybeRunDir.startsWith("--") &&
+      !maybeRunDir.startsWith("node:") &&
+      !maybeRunDir.startsWith("action:") &&
+      !maybeRunDir.startsWith("edge:") &&
+      !maybeRunDir.startsWith("input:") &&
+      !maybeRunDir.startsWith("select:")
+    ) {
+      runDir = maybeRunDir;
+      stepStart = 2;
+    }
+    const parsed = parseRuntimeArgs(args.slice(stepStart));
+    const steps: string[] = [];
+    for (let index = stepStart; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg.startsWith("--")) {
+        const next = args[index + 1];
+        if (next && !next.startsWith("--")) index += 1;
+        continue;
+      }
+      steps.push(arg);
+    }
+    const result = await runExplorationChain({
+      domain,
+      runDir,
+      steps,
+      profile: parsed.args.profile ? String(parsed.args.profile) : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.deterministic ? 0 : 1);
+    return;
+  }
+
+  if (command === "exploration-node") {
+    const domain = parseExplorationDomain(args[0]);
+    const nodeId = args[1];
+    if (!nodeId)
+      throw new Error(
+        "Usage: cartographer exploration-node <domain> <node-id> [latest|<run-dir>]",
+      );
+    const runDir = args[2] && args[2] !== "latest" ? args[2] : undefined;
+    const result = await inspectExplorationNode({ domain, nodeId, runDir });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "exploration-actions") {
+    const domain = parseExplorationDomain(args[0]);
+    const nodeId = args[1];
+    if (!nodeId)
+      throw new Error(
+        "Usage: cartographer exploration-actions <domain> <node-id> [latest|<run-dir>]",
+      );
+    const runDir = args[2] && args[2] !== "latest" ? args[2] : undefined;
+    const result = await inspectExplorationActions({ domain, nodeId, runDir });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "exploration-open-node") {
+    const domain = parseExplorationDomain(args[0]);
+    const nodeId = args[1];
+    if (!nodeId)
+      throw new Error(
+        "Usage: cartographer exploration-open-node <domain> <node-id> [latest|<run-dir>] [--profile default]",
+      );
+    const runDir =
+      args[2] && args[2] !== "latest" && !args[2].startsWith("--")
+        ? args[2]
+        : undefined;
+    const parsed = parseRuntimeArgs(args.slice(runDir ? 3 : 2));
+    const result = await openExplorationNode({
+      domain,
+      nodeId,
+      runDir,
+      profile: parsed.args.profile ? String(parsed.args.profile) : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.deterministic ? 0 : 1);
+    return;
+  }
+
+  if (command === "exploration-open-action") {
+    const domain = parseExplorationDomain(args[0]);
+    const edgeId = args[1];
+    if (!edgeId)
+      throw new Error(
+        "Usage: cartographer exploration-open-action <domain> <edge-id> [latest|<run-dir>] [--profile default]",
+      );
+    const runDir =
+      args[2] && args[2] !== "latest" && !args[2].startsWith("--")
+        ? args[2]
+        : undefined;
+    const parsed = parseRuntimeArgs(args.slice(runDir ? 3 : 2));
+    const result = await openExplorationAction({
+      domain,
+      edgeId,
+      runDir,
+      profile: parsed.args.profile ? String(parsed.args.profile) : undefined,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.deterministic ? 0 : 1);
+    return;
+  }
+
+  if (command === "exploration-exec-action") {
+    const domain = parseExplorationDomain(args[0]);
+    const edgeId = args[1];
+    if (!edgeId)
+      throw new Error(
+        "Usage: cartographer exploration-exec-action <domain> <edge-id> [latest|<run-dir>] [--profile default] [--value <value>] [--commit]",
+      );
+    const runDir =
+      args[2] && args[2] !== "latest" && !args[2].startsWith("--")
+        ? args[2]
+        : undefined;
+    const parsed = parseRuntimeArgs(args.slice(runDir ? 3 : 2));
+    const result = await executeExplorationAction({
+      domain,
+      edgeId,
+      runDir,
+      profile: parsed.args.profile ? String(parsed.args.profile) : undefined,
+      value:
+        parsed.args.value === undefined ? undefined : String(parsed.args.value),
+      commit: parsed.args.commit === true,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.deterministic ? 0 : 1);
+    return;
+  }
+
+  if (command === "session-status") {
+    const domain = parseExplorationDomain(args[0]);
+    const parsed = parseRuntimeArgs(args.slice(1));
+    const goal = parsed.args.goal
+      ? parseExplorationGoal(String(parsed.args.goal))
+      : undefined;
+    const profile = parsed.args.profile
+      ? String(parsed.args.profile)
+      : undefined;
+    const result = await checkSavedSessionStatus({
+      domain,
+      goal,
+      profile,
+      open: parsed.args.open === true || parsed.args.leaveOpen === true,
+      leaveOpen: parsed.args.leaveOpen === true,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.authenticated ? 0 : 1);
     return;
   }
 
@@ -256,6 +647,326 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "eval-acquisition") {
+    const domain = parseDomain(args[0]);
+    const parsed = parseRuntimeArgs(args.slice(1));
+    const fallbackTapeId = String(
+      parsed.args.fallbackTapeId || parsed.args.fallbackId || args[1] || "",
+    );
+    if (!fallbackTapeId) {
+      throw new Error(
+        "Usage: cartographer eval-acquisition instagram.com --fallback-tape-id <fallback-id>",
+      );
+    }
+    const tape = await new JsonFallbackTapeStore().load(domain, fallbackTapeId);
+    if (!tape) throw new Error(`Unknown fallback tape: ${fallbackTapeId}`);
+    const result = await evaluateFallbackAcquisition(tape);
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "analyze-site") {
+    const domain = parseDomain(args[0]);
+    const includeRejected = !args.includes("--exclude-rejected");
+    const result = await analyzeSiteGraph({ domain, includeRejected });
+    console.log(
+      JSON.stringify(
+        {
+          success: true,
+          domain,
+          stage: "graph_synthesis",
+          pipeline: [
+            "load trusted CLI catalog",
+            "load fallback/review evidence",
+            "analyze surfaces and transitions",
+            "create site graph",
+            "emit surface packets",
+          ],
+          jsonPath: result.jsonPath,
+          markdownPath: result.markdownPath,
+          sources: result.graph.sources,
+          nodeCount: result.graph.nodes.length,
+          actionCount: result.graph.actions.length,
+          workflowCount: result.graph.workflows.length,
+          trustedActions: result.graph.actions
+            .filter((action) => action.trust === "trusted_cli")
+            .map((action) => action.id),
+          blockedActions: result.graph.actions
+            .filter((action) => !action.executableByAgent)
+            .slice(0, 10)
+            .map((action) => ({
+              id: action.id,
+              trust: action.trust,
+              risk: action.risk,
+              reason: action.whyNotExecutable,
+            })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (command === "site-summary") {
+    const domain = parseDomain(args[0]);
+    const graph =
+      (await loadSiteGraph(domain)) ??
+      (await analyzeSiteGraph({ domain })).graph;
+    console.log(
+      JSON.stringify(
+        {
+          domain: graph.domain,
+          generatedAt: graph.generatedAt,
+          sources: graph.sources,
+          surfaces: graph.nodes.map((node) => ({
+            id: node.id,
+            summary: node.summary,
+            urlShapes: node.urlShapes,
+            actionCount: graph.actions.filter(
+              (action) => action.from === node.id,
+            ).length,
+          })),
+          workflows: graph.workflows,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (command === "site-node") {
+    const domain = parseDomain(args[0]);
+    const nodeId = args[1];
+    if (!nodeId) {
+      throw new Error("Usage: cartographer site-node instagram.com <node-id>");
+    }
+    const graph =
+      (await loadSiteGraph(domain)) ??
+      (await analyzeSiteGraph({ domain })).graph;
+    const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node) throw new Error(`Unknown site graph node: ${nodeId}`);
+    console.log(
+      JSON.stringify(
+        {
+          node,
+          actions: graph.actions.filter((action) => action.from === node.id),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (command === "site-actions") {
+    const domain = parseDomain(args[0]);
+    const nodeId = args[1];
+    if (!nodeId) {
+      throw new Error(
+        "Usage: cartographer site-actions instagram.com <node-id>",
+      );
+    }
+    const graph =
+      (await loadSiteGraph(domain)) ??
+      (await analyzeSiteGraph({ domain })).graph;
+    console.log(
+      JSON.stringify(
+        {
+          domain,
+          nodeId,
+          actions: graph.actions.filter((action) => action.from === nodeId),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (command === "site-path") {
+    const domain = parseDomain(args[0]);
+    const from = args[1];
+    const to = args[2];
+    if (!from || !to) {
+      throw new Error(
+        "Usage: cartographer site-path instagram.com <from-node-id> <to-node-id>",
+      );
+    }
+    const graph =
+      (await loadSiteGraph(domain)) ??
+      (await analyzeSiteGraph({ domain })).graph;
+    console.log(JSON.stringify(sitePath(graph, from, to), null, 2));
+    return;
+  }
+
+  if (command === "site-blocked") {
+    const domain = parseDomain(args[0]);
+    const graph =
+      (await loadSiteGraph(domain)) ??
+      (await analyzeSiteGraph({ domain })).graph;
+    console.log(
+      JSON.stringify(
+        {
+          domain,
+          generatedAt: graph.generatedAt,
+          actions: graph.actions
+            .filter((action) => !action.executableByAgent)
+            .map(compactGraphAction),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (command === "site-rerecord") {
+    const domain = parseDomain(args[0]);
+    const graph =
+      (await loadSiteGraph(domain)) ??
+      (await analyzeSiteGraph({ domain })).graph;
+    console.log(
+      JSON.stringify(
+        {
+          domain,
+          generatedAt: graph.generatedAt,
+          actions: graph.actions
+            .filter((action) => action.trust === "rerecord_required")
+            .map(compactGraphAction),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (command === "surface") {
+    const domain = parseDomain(args[0]);
+    const surfaceCommand = args[1];
+    if (surfaceCommand === "current") {
+      const live = await currentLiveSurfacePacket(domain);
+      if (live) {
+        console.log(JSON.stringify({ success: true, surface: live }, null, 2));
+        return;
+      }
+      const graph =
+        (await loadSiteGraph(domain)) ??
+        (await analyzeSiteGraph({ domain })).graph;
+      const index = await loadSurfacePacketIndex(domain);
+      console.log(
+        JSON.stringify(
+          {
+            success: false,
+            reason: "No live Cartographer task browser is running.",
+            fallback: {
+              generatedAt: graph.generatedAt,
+              surfacePackets: index?.packets || [],
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    const nodeId = surfaceCommand;
+    if (!nodeId) {
+      throw new Error(
+        "Usage: cartographer surface instagram.com current OR cartographer surface instagram.com <node-id>",
+      );
+    }
+    let packet = await loadSurfacePacket({ domain, nodeId });
+    if (!packet) {
+      await analyzeSiteGraph({ domain });
+      packet = await loadSurfacePacket({ domain, nodeId });
+    }
+    if (!packet) throw new Error(`Unknown surface packet: ${nodeId}`);
+    console.log(JSON.stringify({ success: true, surface: packet }, null, 2));
+    return;
+  }
+
+  if (command === "explore") {
+    const domain = parseDomain(args[0]);
+    const parsed = parseRuntimeArgs(args.slice(1));
+    const scope = String(parsed.args.scope || "dm_navigation");
+    if (scope !== "dm_navigation") {
+      throw new Error(
+        "Only --scope dm_navigation is supported in this first exploration mode.",
+      );
+    }
+    const result = await analyzeSiteGraph({ domain, includeRejected: true });
+    const index = await loadSurfacePacketIndex(domain);
+    console.log(
+      JSON.stringify(
+        {
+          success: true,
+          domain,
+          scope,
+          mode: "bounded_offline_from_existing_evidence",
+          writesExposedWithRisk: true,
+          pipeline: [
+            {
+              stage: "evidence_analysis",
+              inputs: result.graph.sources,
+              output: "surface/action/workflow candidates",
+            },
+            {
+              stage: "graph_creation",
+              command: `cg analyze-site ${domain}`,
+              jsonPath: result.jsonPath,
+              markdownPath: result.markdownPath,
+              nodeCount: result.graph.nodes.length,
+              actionCount: result.graph.actions.length,
+            },
+            {
+              stage: "surface_packet_emission",
+              output: "per-node surface packets for external agents",
+              packetCount: index?.packets.length || 0,
+            },
+            {
+              stage: "promotion_candidate_emission",
+              output: "warned writes and rerecord candidates",
+            },
+          ],
+          graph: {
+            jsonPath: result.jsonPath,
+            markdownPath: result.markdownPath,
+            nodeCount: result.graph.nodes.length,
+            actionCount: result.graph.actions.length,
+          },
+          surfacePackets: index,
+          promotionCandidates: {
+            warnedWrites: result.graph.actions
+              .filter((action) =>
+                ["write", "write_submit"].includes(action.risk),
+              )
+              .map(compactGraphAction),
+            rerecord: result.graph.actions
+              .filter((action) => action.trust === "rerecord_required")
+              .map(compactGraphAction),
+          },
+          note: "This first explore mode compiles the bounded DM graph and surface packets from existing trusted commands and evidence. Live frontier expansion can build on this command.",
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (command === "doctor") {
+    const domain = parseDomain(args[0]);
+    const parsed = parseRuntimeArgs(args.slice(1));
+    const taskId = parsed.args.taskId ? String(parsed.args.taskId) : undefined;
+    const result = await runDoctor(domain, taskId);
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(result.healthy ? 0 : 1);
+    return;
+  }
+
   if (command === "shell" || command === "use") {
     const domain = parseDomain(args[0]);
     const parsed = parseRuntimeArgs(args.slice(1));
@@ -314,25 +1025,52 @@ async function main(): Promise<void> {
       taskId: parsed.taskId,
       intent: parsed.intent?.trim() || "playwright cli fallback",
     });
-    const result = await runRecordedPlaywrightCli({
-      domain,
-      taskId: parsed.taskId,
-      segmentId: activeSegment.segmentId,
-      intent: activeSegment.intent,
-      command: parsed.command,
-      args: parsed.commandArgs,
-      json: parsed.json,
-    });
-    if (parsed.json) {
-      console.log(JSON.stringify(result, null, 2));
-    } else {
-      if (result.stdout.trim()) console.log(result.stdout.trim());
-      if (result.stderr.trim()) console.error(result.stderr.trim());
-      console.log(
-        `cartographer recorded ${result.command} success=${String(result.success)} segment=${activeSegment.segmentId}`,
-      );
+    const invocations = expandRecordedPwInvocation(
+      parsed.command,
+      parsed.commandArgs,
+    );
+    const results = [];
+    for (const invocation of invocations) {
+      const result = await runRecordedPlaywrightCli({
+        domain,
+        taskId: parsed.taskId,
+        segmentId: activeSegment.segmentId,
+        intent: activeSegment.intent,
+        command: invocation.command,
+        args: invocation.args,
+        json: parsed.json,
+      });
+      results.push(result);
+      if (!result.success) break;
     }
-    process.exit(result.success ? 0 : 1);
+    const success = results.every((result) => result.success);
+    if (parsed.json) {
+      console.log(
+        JSON.stringify(
+          results.length === 1
+            ? results[0]
+            : {
+                success,
+                compound: true,
+                requestedCommand: parsed.command,
+                requestedArgs: parsed.commandArgs,
+                segmentId: activeSegment.segmentId,
+                results,
+              },
+          null,
+          2,
+        ),
+      );
+    } else {
+      for (const result of results) {
+        if (result.stdout.trim()) console.log(result.stdout.trim());
+        if (result.stderr.trim()) console.error(result.stderr.trim());
+        console.log(
+          `cartographer recorded ${result.command} success=${String(result.success)} segment=${activeSegment.segmentId}`,
+        );
+      }
+    }
+    process.exit(success ? 0 : 1);
   }
 
   if (command === "abandon-segment") {
@@ -372,7 +1110,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "teach-stagehand" && args[0] === "instagram") {
+  if (command === "teach-browser" && args[0] === "instagram") {
     await teachInstagram();
     return;
   }
@@ -410,27 +1148,13 @@ async function main(): Promise<void> {
       ? await emitSkillMd(domain)
       : await emitSkillMd(
           domain,
-          path.resolve(
-            process.cwd(),
-            "packages",
-            "cartographer",
-            "skills",
-            domain,
-            "SKILL.md",
-          ),
+          path.resolve(process.cwd(), "skills", domain, "SKILL.md"),
         );
     const manifestOutputPath = homeOnly
       ? await emitSkillManifest(domain)
       : await emitSkillManifest(
           domain,
-          path.resolve(
-            process.cwd(),
-            "packages",
-            "cartographer",
-            "skills",
-            domain,
-            "manifest.json",
-          ),
+          path.resolve(process.cwd(), "skills", domain, "manifest.json"),
         );
     const shortcutPath = await emitCartographerShortcut();
     console.log(JSON.stringify({ outputPath, manifestOutputPath }, null, 2));
@@ -548,6 +1272,28 @@ async function main(): Promise<void> {
       );
     }
     const taskStore = new JsonTaskStore();
+    const existingTask = await taskStore.loadTask(domain, taskId);
+    if (existingTask?.status === "closed") {
+      const browser = await closeTaskBrowser(domain, taskId);
+      console.log(
+        JSON.stringify(
+          {
+            success: true,
+            taskId,
+            status: existingTask.status,
+            taskPath: existingTask.taskPath,
+            taskMarkdownPath: existingTask.taskMarkdownPath,
+            completionKind: existingTask.completionKind,
+            completionReason: existingTask.completionReason,
+            alreadyClosed: true,
+            browser,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     const gate = await taskStore.canCompleteTask(domain, taskId, {
       noAcquisitionReason,
     });
@@ -789,6 +1535,10 @@ async function main(): Promise<void> {
       fallbackStore,
       tapeStore: new JsonTapeStore(),
     });
+    const graphSynthesis = await analyzeSiteGraph({
+      domain,
+      includeRejected: true,
+    });
     console.log(
       JSON.stringify(
         {
@@ -797,14 +1547,47 @@ async function main(): Promise<void> {
           decisionSchemaPath: artifacts.decisionSchemaPath,
           decisionTemplatePath: artifacts.decisionTemplatePath,
           evidenceGuide:
-            "Read reviewPath first. It lists fallback review files, candidate slices, operation evidence paths, and selector candidates.",
+            "Read reviewPath first. It lists the acquisition scorecard, obligations, recommended candidates, fallback review files, operation evidence paths, and selector candidates.",
+          acquisitionScorecard: artifacts.request.acquisition?.scorecard,
+          acquisitionObligations:
+            artifacts.request.acquisition?.obligations.map((obligation) => ({
+              id: obligation.id,
+              severity: obligation.severity,
+              code: obligation.code,
+              requiredDisposition: obligation.requiredDisposition,
+              relatedCandidateIds: obligation.relatedCandidateIds,
+            })) || [],
           fallbackReviews: artifacts.request.fallbacks.map((fallback) => ({
             fallbackTapeId: fallback.fallbackTapeId,
             intent: fallback.intent,
             reviewPath: fallback.reviewPath,
             reviewRequestPath: fallback.reviewRequestPath,
+            scorecard: fallback.acquisition?.scorecard,
           })),
           materialized,
+          graphCreation: {
+            stage: "graph_creation",
+            status: "created",
+            inputStage: "reviewed_evidence_analysis",
+            jsonPath: graphSynthesis.jsonPath,
+            markdownPath: graphSynthesis.markdownPath,
+            surfacePacketIndexPath: surfacePacketIndexPath(domain),
+            sources: graphSynthesis.graph.sources,
+            nodeCount: graphSynthesis.graph.nodes.length,
+            actionCount: graphSynthesis.graph.actions.length,
+            workflowCount: graphSynthesis.graph.workflows.length,
+            trustedActionCount: graphSynthesis.graph.actions.filter(
+              (action) => action.trust === "trusted_cli",
+            ).length,
+            blockedActionCount: graphSynthesis.graph.actions.filter(
+              (action) => !action.executableByAgent,
+            ).length,
+            nextCommands: {
+              inspectGraph: `node packages/cartographer/dist/cli.js site-summary ${domain}`,
+              inspectCurrentSurface: `node packages/cartographer/dist/cli.js surface ${domain} current`,
+              inspectBlockedActions: `node packages/cartographer/dist/cli.js site-blocked ${domain}`,
+            },
+          },
           applyDecisionCommand: `node packages/cartographer/dist/cli.js apply-promotion-decision ${domain} --decision-file <decision.json>`,
         },
         null,
@@ -861,12 +1644,12 @@ async function main(): Promise<void> {
     const results = [];
     const segmentTerminalStatus = new Map<
       string,
-      "promoted" | "rejected" | "deleted"
+      "promoted" | "rejected" | "deleted" | "rerecord_requested"
     >();
     const singleDecisionSegmentUpdates: Array<{
       taskId: string;
       segmentId: string;
-      status: "promoted" | "rejected" | "deleted";
+      status: "promoted" | "rejected" | "deleted" | "rerecord_requested";
     }> = [];
     for (const item of decisions) {
       const tape = await fallbackStore.load(domain, item.fallbackTapeId);
@@ -878,10 +1661,12 @@ async function main(): Promise<void> {
             ? "promoted"
             : result.result.action === "reject"
               ? "rejected"
-              : "deleted";
+              : result.result.action === "rerecord"
+                ? "rerecord_requested"
+                : "deleted";
         segmentTerminalStatus.set(
           tape.taskSegmentId,
-          existing === "promoted" || next === "promoted" ? "promoted" : next,
+          strongerSegmentStatus(existing, next),
         );
         singleDecisionSegmentUpdates.push({
           taskId: tape.taskId,
@@ -1035,9 +1820,9 @@ async function main(): Promise<void> {
         "Set INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD in the environment.",
       );
     }
-    const session = await new StagehandBrowserSessionFactory().launch(domain, {
+    const session = await new PlaywrightBrowserSessionFactory().launch(domain, {
       browser: "local",
-      cacheDir: `${cartographerHome()}/stagehand-cache`,
+      cacheDir: `${cartographerHome()}/browser-cache`,
       headless: false,
       viewport: { width: 1288, height: 900 },
     });
@@ -1100,6 +1885,413 @@ async function main(): Promise<void> {
   }
 
   throw new Error(`Unknown command: ${command}`);
+}
+
+function parseExplorationGoal(value: string): ExplorationGoalName {
+  const normalized = value.replace(/-/g, "_");
+  const goals: ExplorationGoalName[] = [
+    "instagram_home_feed",
+    "instagram_search",
+    "instagram_notifications",
+    "instagram_dm_inbox",
+    "instagram_dm_composer",
+    "linkedin_home_feed",
+    "linkedin_search_results",
+    "linkedin_messaging",
+    "linkedin_notifications",
+    "linkedin_my_network",
+    "x_home",
+    "x_explore",
+    "x_notifications",
+    "x_messages",
+    "yc_home",
+    "yc_about",
+    "yc_companies",
+    "yc_jobs",
+    "yc_apply",
+    "yc_blog",
+  ];
+  if (goals.includes(normalized as ExplorationGoalName)) {
+    return normalized as ExplorationGoalName;
+  }
+  throw new Error(`Unsupported exploration goal: ${value}`);
+}
+
+function parseExplorationDomain(value: string | undefined): Domain {
+  if (value === "instagram.com" || value === "instagram")
+    return "instagram.com";
+  if (value === "linkedin.com" || value === "linkedin") return "linkedin.com";
+  if (
+    value === "x.com" ||
+    value === "x" ||
+    value === "twitter.com" ||
+    value === "twitter"
+  )
+    return "x.com";
+  if (
+    value === "ycombinator.com" ||
+    value === "www.ycombinator.com" ||
+    value === "yc" ||
+    value === "ycombinator"
+  )
+    return "ycombinator.com";
+  throw new Error(
+    "Supported exploration domains: instagram.com, linkedin.com, x.com, ycombinator.com.",
+  );
+}
+
+function expandRecordedPwInvocation(
+  command: string,
+  args: string[],
+): Array<{ command: string; args: string[] }> {
+  if (command === "press" && args.length >= 2) {
+    return [
+      { command: "click", args: [args[0]] },
+      { command: "press", args: [args.slice(1).join(" ")] },
+    ];
+  }
+  return [{ command, args }];
+}
+
+async function runDoctor(
+  domain: Domain,
+  taskId?: string,
+): Promise<{
+  healthy: boolean;
+  domain: Domain;
+  taskId?: string;
+  cli: Record<string, unknown>;
+  artifacts: Record<string, unknown>;
+  task?: Record<string, unknown>;
+  browser: Record<string, unknown>;
+  daemon: Record<string, unknown>;
+}> {
+  const cgPath = path.join(binDir(), "cg");
+  const binDirectory = binDir();
+  const binDirectoryOnPath = isDirectoryOnPath(binDirectory);
+  const recommendedCommand = binDirectoryOnPath ? "cg" : cgPath;
+  const taskStore = new JsonTaskStore();
+  const task = taskId ? await taskStore.loadTask(domain, taskId) : null;
+  const segments = taskId
+    ? await taskStore.segmentsForTask(domain, taskId)
+    : [];
+  const browser = await inspectTaskBrowser(domain, taskId, recommendedCommand);
+  const daemon = await inspectPlaywrightDaemon();
+  const artifacts = {
+    catalogPath: catalogPath(domain),
+    catalogExists: await fileExists(catalogPath(domain)),
+    skillPath: skillPath(domain),
+    skillExists: await fileExists(skillPath(domain)),
+    manifestPath: manifestPath(domain),
+    manifestExists: await fileExists(manifestPath(domain)),
+  };
+  const hasBrokenBrowserRecord =
+    browser.recordExists === true && browser.cdpAlive === false;
+  const healthy =
+    daemon.healthy === true &&
+    !hasBrokenBrowserRecord &&
+    (!taskId || Boolean(task));
+  return {
+    healthy,
+    domain,
+    taskId,
+    cli: {
+      cgPath,
+      cgExists: await fileExists(cgPath),
+      binDir: binDirectory,
+      binDirOnPath: binDirectoryOnPath,
+      recommendedCommand,
+      pathHint: binDirectoryOnPath
+        ? undefined
+        : `export PATH="${binDirectory}:$PATH"`,
+    },
+    artifacts,
+    task: taskId
+      ? task
+        ? {
+            exists: true,
+            status: task.status,
+            intent: task.intent,
+            reviewStatus: task.review?.status,
+            segmentCount: segments.length,
+            recordingSegments: segments
+              .filter((segment) => segment.status === "recording")
+              .map((segment) => ({
+                segmentId: segment.segmentId,
+                intent: segment.intent,
+              })),
+          }
+        : { exists: false }
+      : undefined,
+    browser,
+    daemon,
+  };
+}
+
+function compactGraphAction(action: SiteGraphAction): Record<string, unknown> {
+  return {
+    id: action.id,
+    from: action.from,
+    to: action.to,
+    summary: action.summary,
+    risk: action.risk,
+    trust: action.trust,
+    executableByAgent: action.executableByAgent,
+    command:
+      action.implementation.type === "cli"
+        ? action.implementation.command
+        : undefined,
+    whyNotExecutable: action.whyNotExecutable,
+    evidenceRefs: action.evidenceRefs,
+  };
+}
+
+function sitePath(
+  graph: SiteGraph,
+  from: string,
+  to: string,
+): {
+  success: boolean;
+  domain: Domain;
+  from: string;
+  to: string;
+  steps: Array<Record<string, unknown>>;
+  reason?: string;
+} {
+  if (!graph.nodes.some((node) => node.id === from)) {
+    return {
+      success: false,
+      domain: graph.domain,
+      from,
+      to,
+      steps: [],
+      reason: `Unknown from node: ${from}`,
+    };
+  }
+  if (!graph.nodes.some((node) => node.id === to)) {
+    return {
+      success: false,
+      domain: graph.domain,
+      from,
+      to,
+      steps: [],
+      reason: `Unknown to node: ${to}`,
+    };
+  }
+  const queue: Array<{ nodeId: string; path: SiteGraphAction[] }> = [
+    { nodeId: from, path: [] },
+  ];
+  const visited = new Set<string>([from]);
+  const sortedActions = [...graph.actions].sort((left, right) => {
+    const leftPenalty = left.executableByAgent ? 0 : 1;
+    const rightPenalty = right.executableByAgent ? 0 : 1;
+    return leftPenalty - rightPenalty || left.id.localeCompare(right.id);
+  });
+  while (queue.length) {
+    const item = queue.shift();
+    if (!item) break;
+    if (item.nodeId === to) {
+      return {
+        success: true,
+        domain: graph.domain,
+        from,
+        to,
+        steps: item.path.map(compactGraphAction),
+      };
+    }
+    for (const action of sortedActions.filter(
+      (candidate) => candidate.from === item.nodeId,
+    )) {
+      if (visited.has(action.to)) continue;
+      visited.add(action.to);
+      queue.push({ nodeId: action.to, path: [...item.path, action] });
+    }
+  }
+  return {
+    success: false,
+    domain: graph.domain,
+    from,
+    to,
+    steps: [],
+    reason: "No observed path connects these surfaces.",
+  };
+}
+
+async function inspectTaskBrowser(
+  domain: Domain,
+  taskId?: string,
+  cartographerCli = "cg",
+): Promise<Record<string, unknown>> {
+  const recordPath = browserSessionPath(domain);
+  const record = await readJson<Record<string, unknown>>(recordPath);
+  if (!record) {
+    return {
+      recordPath,
+      recordExists: false,
+      cdpAlive: false,
+      status: "not_running",
+      note: `doctor does not start the browser; run ${cartographerCli} use or ${cartographerCli} pw to create a task browser`,
+    };
+  }
+  const cdpUrl = typeof record.cdpUrl === "string" ? record.cdpUrl : "";
+  const pid = typeof record.pid === "number" ? record.pid : 0;
+  const activeTaskIds = Array.isArray(record.activeTaskIds)
+    ? record.activeTaskIds.filter(
+        (item): item is string => typeof item === "string",
+      )
+    : [];
+  const cdpAlive = cdpUrl ? await isCdpEndpointAlive(cdpUrl) : false;
+  return {
+    recordPath,
+    recordExists: true,
+    status: cdpAlive ? "running" : "stale_record",
+    pid,
+    pidAlive: isPidAlive(pid),
+    cdpUrl,
+    cdpAlive,
+    activeTaskIds,
+    taskLeased: taskId ? activeTaskIds.includes(taskId) : undefined,
+    updatedAt: record.updatedAt,
+  };
+}
+
+async function inspectPlaywrightDaemon(): Promise<Record<string, unknown>> {
+  const bin = process.env.CARTOGRAPHER_PLAYWRIGHT_CLI_BIN || "playwright-cli";
+  const daemonDir =
+    process.env.CARTOGRAPHER_PLAYWRIGHT_DAEMON_DIR ||
+    path.join("/private/tmp", "cartographer-playwright-daemon");
+  const timeoutMs = Number(
+    process.env.CARTOGRAPHER_DOCTOR_TIMEOUT_MS || "3000",
+  );
+  const result = await runCommandWithTimeout(bin, ["list", "--all"], {
+    timeoutMs,
+    env: {
+      ...process.env,
+      PLAYWRIGHT_DAEMON_SESSION_DIR: daemonDir,
+    },
+  });
+  return {
+    bin,
+    daemonDir,
+    healthy: result.exitCode === 0,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    stdoutPreview: result.stdout.trim().slice(0, 2000),
+    stderrPreview: result.stderr.trim().slice(0, 2000),
+  };
+}
+
+async function runCommandWithTimeout(
+  command: string,
+  args: string[],
+  options: { timeoutMs: number; env: NodeJS.ProcessEnv },
+): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}> {
+  return await new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: process.cwd(),
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const settle = (result: {
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
+    timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      settle({
+        exitCode: 124,
+        stdout,
+        stderr:
+          `${stderr}\n${command} timed out after ${options.timeoutMs}ms`.trim(),
+        timedOut: true,
+      });
+    }, options.timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      settle({
+        exitCode: 127,
+        stdout,
+        stderr: error.message,
+        timedOut: false,
+      });
+    });
+    child.on("close", (code) => {
+      settle({ exitCode: code || 0, stdout, stderr, timedOut: false });
+    });
+  });
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readJson<T>(filePath: string): Promise<T | null> {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function isCdpEndpointAlive(cdpUrl: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1000);
+  try {
+    const response = await fetch(`${cdpUrl}/json/version`, {
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDirectoryOnPath(directory: string): boolean {
+  const normalized = path.resolve(directory);
+  return (process.env.PATH || "")
+    .split(path.delimiter)
+    .filter(Boolean)
+    .some((entry) => path.resolve(entry) === normalized);
 }
 
 function normalizeIntent(intent: string): string {
@@ -1426,6 +2618,20 @@ function printCompactFallbackResult(
   }
   if (summary?.warnings.length) {
     console.log(`warnings: ${summary.warnings.join(", ")}`);
+  }
+  const grounding = result.operation.writeGrounding || summary?.writeGrounding;
+  if (grounding?.writeAdjacent) {
+    console.log(
+      `write-grounding: ${grounding.promotionReady ? "promotion-ready" : "rerecord-needed"}${grounding.recommendedSelector ? ` selector=${grounding.recommendedSelector}` : ""}`,
+    );
+    for (const candidate of grounding.candidates.slice(0, 3)) {
+      console.log(
+        `  score=${candidate.score} matches=${candidate.matchCount} visible=${candidate.visible} enabled=${candidate.enabled} ${candidate.selector}`,
+      );
+    }
+    if (grounding.warnings.length) {
+      console.log(`  warnings=${grounding.warnings.join(", ")}`);
+    }
   }
   if (result.operation.evidenceSummaryPath) {
     console.log(`summary: ${result.operation.evidenceSummaryPath}`);
@@ -1888,10 +3094,10 @@ async function teachInstagram(options?: {
   reviewAtEnd?: boolean;
 }): Promise<void> {
   const domain = options?.domain || "instagram.com";
-  const factory = new StagehandBrowserSessionFactory();
+  const factory = new PlaywrightBrowserSessionFactory();
   const session = await factory.launch(domain, {
     browser: "local",
-    cacheDir: `${cartographerHome()}/stagehand-cache`,
+    cacheDir: `${cartographerHome()}/browser-cache`,
     headless: false,
     viewport: { width: 1288, height: 900 },
   });
@@ -1902,7 +3108,7 @@ async function teachInstagram(options?: {
     new JsonStateActionCache(),
   );
 
-  console.log("Opened Instagram in a Stagehand local Chrome session.");
+  console.log("Opened Instagram in a Playwright local Chrome session.");
   console.log("Log in manually if needed, then use commands below.");
   if (options?.fallbackIntent) {
     console.log(`Fallback intent: ${options.fallbackIntent}`);
@@ -2053,8 +3259,45 @@ function printHelp(): void {
   cartographer begin-task instagram.com --intent <task>
 	  cartographer use instagram.com --task "<task>" [--intent <segment>]
 	  cartographer shell instagram.com --task-id <task-id> [--intent <segment>]
+	  cartographer doctor instagram.com [--task-id <task-id>]
 	  cartographer show-task instagram.com --task-id <task-id>
 	  cartographer task-summary instagram.com --task-id <task-id>
+	  cartographer analyze-site instagram.com [--exclude-rejected]
+	  cartographer site-summary instagram.com
+	  cartographer site-node instagram.com <node-id>
+	  cartographer site-actions instagram.com <node-id>
+	  cartographer site-path instagram.com <from-node-id> <to-node-id>
+	  cartographer site-blocked instagram.com
+	  cartographer site-rerecord instagram.com
+	  cartographer graph import ycombinator.com [latest|<run-dir>] [--db-path <path>]
+	  cartographer graph summary ycombinator.com [--db-path <path>]
+	  cartographer graph search ycombinator.com <query> [--limit 10] [--db-path <path>]
+	  cartographer graph path ycombinator.com <from-surface-id> <to-surface-id> [--max-depth 20] [--db-path <path>]
+	  cartographer graph actions ycombinator.com <surface-id> [--db-path <path>]
+	  cartographer surface instagram.com current
+	  cartographer surface instagram.com <node-id>
+	  cartographer explore instagram.com --scope dm_navigation
+	  cartographer explore-harness instagram.com [--max-depth 1] [--max-edges 12] [--max-captures 36] [--goal instagram_home_feed|instagram_search|instagram_notifications|instagram_dm_inbox|instagram_dm_composer] [--task-id <task-id>] [--profile default] [--resume latest|<run-dir>]
+	  cartographer explore-harness linkedin.com --goal linkedin_home_feed|linkedin_search_results|linkedin_messaging|linkedin_notifications|linkedin_my_network [--profile default]
+	  cartographer explore-harness x.com --goal x_home|x_explore|x_notifications|x_messages [--profile default]
+	  cartographer explore-harness ycombinator.com --goal yc_home|yc_about|yc_companies|yc_jobs|yc_apply|yc_blog [--max-depth 2] [--max-edges 24] [--max-captures 72] [--profile default] [--resume latest|<run-dir>]
+	  cartographer verify-exploration-run x.com|linkedin.com|ycombinator.com [latest|<run-dir>] [--write]
+	  cartographer exploration-handoff-bundle x.com|linkedin.com|ycombinator.com [latest|<run-dir>]
+	  cartographer exploration-agent-eval x.com|linkedin.com|ycombinator.com [latest|<run-dir>] [--min-path-length 2] [--target-count 5] [--include-top-level] [--dry-run] [--write] [--profile default]
+	  cartographer exploration-summary x.com|linkedin.com|ycombinator.com [latest|<run-dir>]
+	  cartographer exploration-graph x.com|linkedin.com|ycombinator.com [latest|<run-dir>]
+	  cartographer exploration-progress x.com|linkedin.com|ycombinator.com [latest|<run-dir>]
+	  cartographer exploration-topology x.com|linkedin.com|ycombinator.com [latest|<run-dir>] [--write]
+	  cartographer exploration-visualize x.com|linkedin.com|ycombinator.com [latest|<run-dir>]
+	  cartographer exploration-agent-contract x.com|linkedin.com|ycombinator.com [latest|<run-dir>]
+	  cartographer exploration-path x.com|linkedin.com|ycombinator.com <from-node-id> <to-node-id> [latest|<run-dir>]
+	  cartographer exploration-chain x.com|linkedin.com|ycombinator.com [latest|<run-dir>] node:<node-id> action:<edge-id>|input:<edge-id>=<value>|select:<edge-id>=<value>... [--profile default]
+	  cartographer exploration-node x.com|linkedin.com|ycombinator.com <node-id> [latest|<run-dir>]
+	  cartographer exploration-actions x.com|linkedin.com|ycombinator.com <node-id> [latest|<run-dir>]
+	  cartographer exploration-open-node x.com|linkedin.com|ycombinator.com <node-id> [latest|<run-dir>] [--profile default]
+	  cartographer exploration-open-action x.com|linkedin.com|ycombinator.com <edge-id> [latest|<run-dir>] [--profile default]
+	  cartographer exploration-exec-action x.com|linkedin.com|ycombinator.com <edge-id> [latest|<run-dir>] [--profile default] [--value <value>] [--commit]
+	  cartographer session-status x.com|linkedin.com|instagram.com|ycombinator.com [--goal <goal>] [--profile default] [--open] [--leave-open]
 	  cartographer pw instagram.com --task-id <task-id> [--intent <segment>] <playwright-cli-command> [args...]
 	  cartographer abandon-segment instagram.com --task-id <task-id> --segment-id <segment-id> --reason <reason>
 	  cartographer emit-cli instagram.com
@@ -2065,6 +3308,7 @@ function printHelp(): void {
 	  cartographer exec-command instagram.com <command> [--task-id <task-id>] [--auto-chain] [--dry-run] [--confirm-write] [--key value]
 	  cartographer run instagram.com <process-name> [--task-id <task-id>] [--auto-chain] [--dry-run] [--confirm-write] [--key value]
 	  cartographer review-fallbacks instagram.com
+	  cartographer eval-acquisition instagram.com --fallback-tape-id <fallback-id>
 	  cartographer review-task instagram.com --task-id <task-id>
 	  cartographer complete-task instagram.com --task-id <task-id> [--no-acquisition-reason <reason>]
 	  cartographer inspect-fallback instagram.com <fallback-id>
@@ -2072,6 +3316,177 @@ function printHelp(): void {
 	  cartographer apply-promotion-decision instagram.com --decision-file <decision.json>
 	  cartographer cleanup-recordings instagram.com --confirm-delete
 	  cartographer reset-skills instagram.com --confirm-delete`);
+}
+
+async function runGraphCommand(args: string[]): Promise<void> {
+  const [subcommand, domainArg, ...rest] = args;
+  const domain = parseDomain(domainArg);
+  const parsed = parseGraphCommandArgs(rest);
+  if (subcommand === "import") {
+    requireGraphPositionals(parsed.positionals, 0, 1, subcommand);
+    const runArg = parsed.positionals[0];
+    const runDir =
+      !runArg || runArg === "latest"
+        ? await latestExplorationRunDir(domain)
+        : runArg;
+    console.log(
+      JSON.stringify(
+        await importExplorationRunToGraphDb({
+          domain,
+          runDir,
+          dbPath: parsed.dbPath,
+        }),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  if (subcommand === "summary") {
+    requireGraphPositionals(parsed.positionals, 0, 0, subcommand);
+    console.log(
+      JSON.stringify(
+        summarizeGraphDb({
+          domain,
+          dbPath: parsed.dbPath,
+        }),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  if (subcommand === "search") {
+    const query = parsed.positionals.join(" ");
+    if (!query) {
+      throw new Error("Usage: cartographer graph search <domain> <query>");
+    }
+    console.log(
+      JSON.stringify(
+        searchGraphDb({
+          domain,
+          query,
+          dbPath: parsed.dbPath,
+          limit: parsed.limit,
+        }),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  if (subcommand === "path") {
+    requireGraphPositionals(parsed.positionals, 2, 2, subcommand);
+    const [fromSurfaceId, toSurfaceId] = parsed.positionals;
+    if (!fromSurfaceId || !toSurfaceId) {
+      throw new Error(
+        "Usage: cartographer graph path <domain> <from-surface-id> <to-surface-id>",
+      );
+    }
+    const result = findGraphDbPath({
+      domain,
+      fromSurfaceId,
+      toSurfaceId,
+      dbPath: parsed.dbPath,
+      maxDepth: parsed.maxDepth,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.found ? 0 : 1;
+    return;
+  }
+  if (subcommand === "actions") {
+    requireGraphPositionals(parsed.positionals, 1, 1, subcommand);
+    const surfaceId = parsed.positionals[0];
+    if (!surfaceId) {
+      throw new Error(
+        "Usage: cartographer graph actions <domain> <surface-id>",
+      );
+    }
+    console.log(
+      JSON.stringify(
+        inspectGraphDbActions({
+          domain,
+          surfaceId,
+          dbPath: parsed.dbPath,
+        }),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  throw new Error(
+    "Usage: cartographer graph import|summary|search|path|actions <domain> ...",
+  );
+}
+
+function parseGraphCommandArgs(args: string[]): {
+  positionals: string[];
+  dbPath?: string;
+  limit?: number;
+  maxDepth?: number;
+} {
+  const positionals: string[] = [];
+  let dbPath: string | undefined;
+  let limit: number | undefined;
+  let maxDepth: number | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--db-path") {
+      dbPath = requiredGraphFlagValue(args, ++index, arg);
+      continue;
+    }
+    if (arg === "--limit") {
+      limit = positiveGraphNumber(
+        requiredGraphFlagValue(args, ++index, arg),
+        arg,
+      );
+      continue;
+    }
+    if (arg === "--max-depth") {
+      maxDepth = positiveGraphNumber(
+        requiredGraphFlagValue(args, ++index, arg),
+        arg,
+      );
+      continue;
+    }
+    if (arg.startsWith("--")) throw new Error(`Unknown graph flag: ${arg}`);
+    positionals.push(arg);
+  }
+  return { positionals, dbPath, limit, maxDepth };
+}
+
+function requiredGraphFlagValue(
+  args: string[],
+  index: number,
+  flag: string,
+): string {
+  const value = args[index];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+function positiveGraphNumber(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function requireGraphPositionals(
+  positionals: string[],
+  minimum: number,
+  maximum: number,
+  subcommand: string | undefined,
+): void {
+  if (positionals.length < minimum || positionals.length > maximum) {
+    throw new Error(
+      `Unexpected arguments for graph ${subcommand || "command"}: ${positionals.join(" ")}`,
+    );
+  }
 }
 
 function printTeachHelp(): void {
@@ -2090,8 +3505,23 @@ function printTeachHelp(): void {
 function parseDomain(value: string | undefined): Domain {
   if (value === "instagram.com" || value === "instagram")
     return "instagram.com";
+  if (value === "linkedin.com" || value === "linkedin") return "linkedin.com";
+  if (
+    value === "x.com" ||
+    value === "x" ||
+    value === "twitter.com" ||
+    value === "twitter"
+  )
+    return "x.com";
+  if (
+    value === "ycombinator.com" ||
+    value === "www.ycombinator.com" ||
+    value === "yc" ||
+    value === "ycombinator"
+  )
+    return "ycombinator.com";
   throw new Error(
-    "Only instagram.com is supported in v1. Use instagram or instagram.com.",
+    "Supported domains: instagram.com, linkedin.com, x.com, ycombinator.com.",
   );
 }
 
@@ -2359,6 +3789,26 @@ function createPromotionDecisionApplier(
   );
 }
 
+type TerminalSegmentStatus =
+  | "promoted"
+  | "rejected"
+  | "deleted"
+  | "rerecord_requested";
+
+function strongerSegmentStatus(
+  existing: TerminalSegmentStatus | undefined,
+  next: TerminalSegmentStatus,
+): TerminalSegmentStatus {
+  if (!existing) return next;
+  const rank: Record<TerminalSegmentStatus, number> = {
+    deleted: 1,
+    rejected: 2,
+    rerecord_requested: 3,
+    promoted: 4,
+  };
+  return rank[next] > rank[existing] ? next : existing;
+}
+
 async function saveFallbackTape(input: {
   domain: Domain;
   intent: string;
@@ -2380,7 +3830,7 @@ async function saveFallbackTape(input: {
     }),
     domain: input.domain,
     intent: input.intent,
-    source: "stagehand_fallback" as const,
+    source: "playwright_fallback" as const,
     status: "succeeded" as const,
     entry: input.steps[0].before,
     steps: input.steps,

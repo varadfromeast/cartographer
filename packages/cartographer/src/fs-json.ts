@@ -15,12 +15,18 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   }
 }
 
-export async function writeJsonFile<T>(filePath: string, value: T): Promise<void> {
+export async function writeJsonFile<T>(
+  filePath: string,
+  value: T,
+): Promise<void> {
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-export async function appendJsonLine(filePath: string, value: unknown): Promise<void> {
+export async function appendJsonLine(
+  filePath: string,
+  value: unknown,
+): Promise<void> {
   await ensureDir(path.dirname(filePath));
   await fs.appendFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
 }

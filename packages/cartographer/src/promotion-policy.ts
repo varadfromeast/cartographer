@@ -265,6 +265,13 @@ function validateOutputs(
         `Output ${output.name} requires a description.`,
       );
     }
+    if (output.transform?.limit !== undefined && output.transform.limit < 1) {
+      addError(
+        findings,
+        "invalid_output_transform_limit",
+        `Output ${output.name} transform limit must be positive.`,
+      );
+    }
   }
 }
 
@@ -292,12 +299,27 @@ function validatePostconditions(
           "selector_exists requires a selector.",
         );
       }
-    } else if (postcondition.type === "text_contains") {
+    } else if (
+      postcondition.type === "text_contains" ||
+      postcondition.type === "rendered_text_contains"
+    ) {
       if (!postcondition.selector.trim() || !postcondition.value.trim()) {
         addError(
           findings,
           "empty_text_postcondition",
-          "text_contains requires a selector and value.",
+          `${postcondition.type} requires a selector and value.`,
+        );
+      }
+    } else if (postcondition.type === "scoped_text_contains") {
+      if (
+        !postcondition.selectors.length ||
+        postcondition.selectors.some((selector) => !selector.trim()) ||
+        !postcondition.value.trim()
+      ) {
+        addError(
+          findings,
+          "empty_scoped_text_postcondition",
+          "scoped_text_contains requires at least one selector and a value.",
         );
       }
     } else {
@@ -354,9 +376,12 @@ function validatePlaceholdersInValidators(
     const values =
       validator.type === "selector_exists"
         ? [validator.selector]
-        : validator.type === "text_contains"
-          ? [validator.selector, validator.value]
-          : [validator.value];
+        : validator.type === "scoped_text_contains"
+          ? [...validator.selectors, validator.value]
+          : validator.type === "text_contains" ||
+              validator.type === "rendered_text_contains"
+            ? [validator.selector, validator.value]
+            : [validator.value];
     for (const value of values) {
       for (const placeholder of extractPlaceholders(value)) {
         if (!argNames.has(placeholder)) {

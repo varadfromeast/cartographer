@@ -1,133 +1,251 @@
 # Cartographer Live Testing Plan
 
-This plan validates the current Cartographer V1 loop against a real browser
-run. The Instagram acquired skill catalog is intentionally empty at the start of
-this plan.
+## Goal
 
-## Scope
+Live tests should prove whether an external agent can use the graph, surface artifacts, and trusted CLI commands before falling back to recorded Playwright browsing.
 
-Validate:
+The purpose is no longer “force every task into promotion.” Promotion remains useful, but V1 product value comes from making the site graph accurate, compact, actionable, and honest about write-capable surfaces.
 
-- `cg use instagram --task "<task>"` creates a task envelope.
-- the task shell accepts piped/scripted commands and exits cleanly.
-- fallback commands run through the recorded Playwright CLI substrate.
-- fallback creates file-backed task, segment, evidence, and review artifacts.
-- `review-task --task-id` scopes review to the task file.
-- `apply-promotion-decision` is the only mutation path for promotion/rejection.
-- `complete-task` closes the task and releases the task browser lease.
+## Smoke Loop
 
-Do not assume any acquired Instagram commands exist. If a command is acquired
-during testing, it must come from fallback evidence and a typed decision.
-
-## Preflight
-
-Run:
+1. Refresh generated code and contracts.
 
 ```bash
-pnpm --filter @cartographer/core typecheck
-pnpm --filter @cartographer/core build
-node packages/cartographer/dist/cli.js expose-skills instagram.com
-node -e "const fs=require('fs'); const p=process.env.HOME+'/.cartographer/sites/instagram.com/catalog.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); console.log(Object.keys(j.processes||{}))"
+pnpm build
+node dist/cli.js expose-skills instagram.com
 ```
 
-Expected:
-
-- typecheck passes.
-- build passes.
-- repo-exposed `SKILL.md` and `manifest.json` regenerate.
-- printed command list is `[]` unless a test intentionally acquired a command.
-
-## Test 1: Scripted Shell Lifecycle
-
-Run:
+2. Compile the graph from current evidence.
 
 ```bash
-printf '%s\n' 'complete --no-acquisition-reason "scripted exit smoke"' \
-  | node packages/cartographer/dist/cli.js use instagram --task "scripted shell exit smoke" --intent "no browser ops"
+node dist/cli.js analyze-site instagram.com
+node dist/cli.js site-summary instagram.com
 ```
 
-Expected:
+3. Give an external agent only:
 
-- command exits without hanging.
-- output includes `success:true`.
-- task status is `closed`.
+- `skills/instagram.com/SKILL.md`
+- `~/.cartographer/sites/instagram.com/site-graph.md`
 
-## Test 2: Browser Fallback Records Evidence
+4. Ask it to solve a small Instagram task.
 
-Run:
+5. Observe whether it:
 
-```bash
-printf '%s\n' 'goto /direct/inbox/' 'review' 'exit' \
-  | node packages/cartographer/dist/cli.js use instagram --task "browser fallback smoke" --intent "open inbox"
-```
+- uses trusted CLI actions first
+- understands write-risk warnings
+- falls back through `cg use`, `cg shell`, or `cg pw`
+- avoids raw CDP/standalone scripts
+- closes with review when fallback was used
 
-Expected:
+## Pass Criteria
 
-- shell reports `mode:"scripted"`.
-- `goto` succeeds and prints a compact evidence summary path.
-- review output includes `reviewPath`, `reviewRequestPath`,
-  `decisionSchemaPath`, `decisionTemplatePath`, and `fallbackReviews`.
-- command exits without hanging.
+- The graph is understandable without raw tape spelunking.
+- Trusted navigation actions are discoverable.
+- Write-capable actions are visible with risk metadata instead of hidden.
+- Fallback evidence is created when the graph lacks a trusted action.
+- Review does not promote brittle write selectors.
 
-## Test 3: Apply Decision
+## Current Instagram Expected Result
 
-Use the returned `decisionTemplatePath` from Test 2:
-
-```bash
-node packages/cartographer/dist/cli.js apply-promotion-decision instagram.com --decision-file <decisionTemplatePath>
-```
-
-Expected:
-
-- duplicate/noisy fallback slices are rejected, or promotion succeeds only when
-  the typed decision explicitly promotes a reusable slice.
-- catalog mutation, if any, happens only through `apply-promotion-decision`.
-
-## Test 4: Complete Task
-
-Run:
-
-```bash
-node packages/cartographer/dist/cli.js complete-task instagram.com --task-id <taskId>
-```
-
-Expected:
-
-- task status becomes `closed`.
-- browser lease is released.
-- if no fallback tape was saved, command requires
-  `--no-acquisition-reason <reason>`.
-
-## Test 5: Optional Live Write
-
-Only run this when explicitly approved. Stay inside `cg use`; do not use raw
-Playwright scripts or external browsers for acquisition evidence.
-
-Example shape:
+The DM workflow should be shown as partial:
 
 ```text
-goto /direct/t/<thread-id>/
-intent send test message
-fill placeholder="Message..." "cartographer smoke <timestamp>"
-press Enter
-snapshot
-review
-exit
+open_inbox -> open_thread_by_name -> send_message_current_thread
 ```
 
-Expected:
+All three actions are visible in the graph. `send_message_current_thread` is write-submit risk and must leave rendered postcondition evidence and visual review artifacts when executed.
 
-- write fallback records `writesToPlatform:true`.
-- review can reject the one-off write or promote only a properly parameterized,
-  reusable command with explicit postconditions.
+If a live task requires sending a message and the trusted command fits, the agent may use it. If it falls back instead, it must leave evidence. The graph should expose the write edge either way, with warning risk metadata.
 
-## Stop Conditions
+## Exploration Harness Loop
 
-Stop and inspect before promotion if:
+The live exploration harness currently supports:
 
-- shell process hangs after `exit`.
-- fallback segment files are missing or not linked from task files.
-- `review-task --task-id` includes unrelated fallback tapes.
-- unsupported commands are listed as Playwright fallback commands.
-- a promote decision succeeds without passing schema and policy checks.
-- cleanup removes acquired process tapes or generated command contracts.
+```text
+captureSurface
+-> classifySurface
+-> matchExistingNode
+-> diffSurfaceControls
+-> extractCandidateEdges
+-> reconcileEdges
+-> recordGraphMutation
+```
+
+For LinkedIn this was verified across five live goals:
+
+- `linkedin_home_feed`
+- `linkedin_search_results`
+- `linkedin_messaging`
+- `linkedin_notifications`
+- `linkedin_my_network`
+
+Each run emitted `surface.json`, `surface.md`, `stripped.html`, `aria-snapshot.yml`, `ax-tree.json`, screenshots, `classification.json`, `candidate-edges.json`, `graph-mutation.json`, and `graph-candidate.json`.
+
+Next Instagram live harness goals:
+
+- `instagram_home_feed`
+- `instagram_search`
+- `instagram_notifications`
+- `instagram_dm_inbox`
+- `instagram_dm_composer`
+
+## X Harness Live Evidence
+
+X (`x.com`) now has a saved authenticated `default` browser profile.
+
+Session checks:
+
+```bash
+node dist/cli.js session-status x.com --goal x_home
+node dist/cli.js session-status x.com --goal x_notifications
+node dist/cli.js session-status x.com --goal x_messages
+```
+
+All currently report `authenticated: true` with `auth_token`, `ct0`, and `twid` cookie names present.
+
+Recent verified X roots:
+
+```bash
+node dist/cli.js explore-harness x.com --goal x_home --max-depth 1
+node dist/cli.js explore-harness x.com --goal x_messages --max-depth 1
+node dist/cli.js explore-harness x.com --goal x_notifications --max-depth 1
+node dist/cli.js explore-harness x.com --goal x_explore --max-depth 1 --profile default
+```
+
+Run artifacts:
+
+```text
+~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-38-56-003z/run.json
+~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-39-56-563z/run.json
+~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-05-23-392z/run.json
+~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t18-20-52-089z/run.json
+```
+
+Observed graph candidates:
+
+- 7 nodes: `x_notifications`, `x_home`, `x_explore`, `x_profile`, `x_messages`, `x_grok`, `x_bookmarks`
+- 122 candidate edges
+- 7 write-risk candidate edges, all retained with warning metadata
+- per-surface artifacts now include `node-match.json`, `control-diff.json`, and `edge-reconciliation.json`
+- verifier result for `x_home`: `ok: true`, 7 captures, 7 graph nodes, 122 graph edges, 0 missing artifacts, 0 mismatches
+- verifier result for `x_messages`: `ok: true`, 8 captures, 7 graph nodes, 122 graph edges, 0 missing artifacts, 0 mismatches
+- verifier result for profile-aware locked `x_explore`: `ok: true`, 7 captures, 7 graph nodes, 122 graph edges, 0 missing artifacts, 0 mismatches
+- `x_messages` currently redirects to `x.com/i/chat/pin/recovery`, which is classified as the messages surface because it gates the messages route
+
+The run summary now exposes the main artifact paths directly:
+
+- `classificationPath`
+- `nodeMatchPath`
+- `controlDiffPath`
+- `candidateEdgesPath`
+- `edgeReconciliationPath`
+- `graphMutationPath`
+
+Verifier command:
+
+```bash
+node dist/cli.js verify-exploration-run x.com latest
+node dist/cli.js verify-exploration-run x.com ~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-38-56-003z
+node dist/cli.js verify-exploration-run x.com ~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-39-56-563z
+node dist/cli.js verify-exploration-run x.com ~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-05-23-392z
+node dist/cli.js verify-exploration-run x.com ~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t18-20-52-089z
+```
+
+Graph summary command:
+
+```bash
+node dist/cli.js exploration-summary x.com latest
+node dist/cli.js exploration-summary x.com ~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-39-56-563z
+node dist/cli.js exploration-summary x.com ~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-15-50-352z
+```
+
+Additional verified X root:
+
+```bash
+node dist/cli.js explore-harness x.com --goal x_explore --max-depth 1
+node dist/cli.js verify-exploration-run x.com ~/.cartographer/sites/x.com/exploration-runs/explore-2026-05-29t17-15-50-352z
+```
+
+This run also emitted 7 captures, 7 graph nodes, 122 graph edges, 7 write-risk edges, and clean reconciliation totals.
+
+## Profile Lock Evidence
+
+`HarnessRunConfig.profile` is now honored by `explore-harness`, `session-status`, and the task-browser close path. Live browser-profile access is serialized per domain/profile with `withBrowserProfileLock`.
+
+Browser sessions also now use timestamped task leases:
+
+- `browser-session.json` stores `activeTaskLeases` with task id, owner PID, and update time
+- `session-status` normalizes legacy records and prunes stale leases
+- `explore-harness` removes its lease after a run but intentionally keeps the saved browser open for fast reuse
+- current X and LinkedIn saved profiles show `activeTaskIds: []` and `activeTaskLeaseCount: 0` while remaining authenticated
+
+The failure that prompted this was two parallel `session-status` commands against the same profile aborting each other's `page.goto`. After adding the lock, the same parallel shape completed cleanly:
+
+```bash
+node dist/cli.js session-status x.com --goal x_home --profile default
+node dist/cli.js session-status x.com --goal x_messages --profile default
+node dist/cli.js session-status linkedin.com --goal linkedin_home_feed --profile default
+node dist/cli.js session-status linkedin.com --goal linkedin_messaging --profile default
+```
+
+Observed results:
+
+- both X commands completed with `authenticated: true`
+- pre-login LinkedIn checks completed without navigation aborts and correctly reported `authenticated: false`, `loginLike: true`
+- after manual login, LinkedIn checks for feed, messaging, and notifications completed with `authenticated: true`
+- the locked X `x_explore` crawl verified with 7 nodes, 122 graph edges, and clean reconciliation totals
+- the post-lease-cleanup X `x_home` crawl verified with 7 nodes, 122 graph edges, 0 active leases after close, and the saved browser still reachable over CDP
+
+## Reuse Checks
+
+Open-source tools considered for harness functions:
+
+- Session persistence: Playwright auth guidance supports storing authenticated browser state on disk: https://playwright.dev/docs/auth. Cartographer currently uses persistent browser profiles because CDP reuse and manual login gates are core to the local harness.
+- Browser-profile locking: `proper-lockfile` provides cross-process lockfiles using an atomic `mkdir` strategy: https://www.npmjs.com/package/proper-lockfile. Cartographer uses it for per-domain/profile browser access because multiple CLI processes can otherwise drive the same CDP page at once.
+- Lease cleanup: Node supports using signal `0` with `process.kill` to test process existence: https://nodejs.org/download/release/v5.0.0/docs/api/process.html. Cartographer uses that local primitive to prune browser task leases whose owner process has exited.
+- Crawler orchestration: Crawlee has `PlaywrightCrawler` and request queue support: https://crawlee.dev/js/api/3.15/playwright-crawler. Cartographer keeps a smaller custom loop for now because each crawl step must emit surface, graph, reconciliation, and review artifacts.
+- Schema validation: Zod is a good candidate for future external artifact validation: https://zod.dev/. The current verifier is custom because it checks cross-file graph invariants, not only object shapes.
+- Graph algorithms: graphology is a strong future candidate for graph algorithms once graph-candidate artifacts stabilize: https://graphology.github.io/. Current graph checks are direct invariants over Cartographer's compact graph model.
+
+## LinkedIn Harness Live Evidence
+
+LinkedIn now has a saved authenticated `default` browser profile and live CDP record.
+
+Current check:
+
+- `session-status linkedin.com --goal linkedin_home_feed --profile default` reports `authenticated: true`
+- auth cookie names include `li_at`, `liap`, `JSESSIONID`, `bcookie`, `bscookie`, and `lidc`
+- the saved profile URL is `https://www.linkedin.com/feed/`
+
+Session command:
+
+```bash
+node dist/cli.js session-status linkedin.com --goal linkedin_home_feed
+node dist/cli.js session-status linkedin.com --goal linkedin_home_feed --leave-open
+```
+
+The `--leave-open` form remains useful if the session expires. It leaves the saved browser profile on the LinkedIn login screen so login can be completed manually.
+
+Authenticated crawler runs:
+
+```bash
+node dist/cli.js explore-harness linkedin.com --goal linkedin_home_feed --max-depth 1
+node dist/cli.js explore-harness linkedin.com --goal linkedin_messaging --max-depth 1
+node dist/cli.js explore-harness linkedin.com --goal linkedin_notifications --max-depth 1
+```
+
+Fresh verified run artifacts:
+
+```text
+~/.cartographer/sites/linkedin.com/exploration-runs/explore-2026-05-29t18-32-03-142z/run.json
+~/.cartographer/sites/linkedin.com/exploration-runs/explore-2026-05-29t18-33-48-440z/run.json
+~/.cartographer/sites/linkedin.com/exploration-runs/explore-2026-05-29t18-35-13-888z/run.json
+```
+
+Verifier results:
+
+- `linkedin_home_feed`: `ok: true`, 8 captures, 7 graph nodes, 297 graph edges, 34 write-risk edges, 0 missing artifacts, 0 mismatches
+- `linkedin_messaging`: `ok: true`, 7 captures, 6 graph nodes, 235 graph edges, 27 write-risk edges, 0 missing artifacts, 0 mismatches
+- `linkedin_notifications`: `ok: true`, 8 captures, 8 graph nodes, 309 graph edges, 28 write-risk edges, 0 missing artifacts, 0 mismatches
+
+These runs proved classifier coverage for authenticated LinkedIn feed, messaging, notifications, my network, jobs, learning, profile analytics, preferences, and profile routes. They also proved every captured surface now emits node match, control diff, candidate edges, edge reconciliation, and graph mutation artifacts.

@@ -104,6 +104,10 @@ async function writeSkillReadme(process: ProcessTape): Promise<void> {
         lines.push(
           `- Requires text: \`${precondition.selector}\` includes \`${precondition.value}\``,
         );
+      } else if (precondition.type === "scoped_text_contains") {
+        lines.push(
+          `- Requires scoped text: \`${precondition.selectors.join(", ")}\` includes \`${precondition.value}\``,
+        );
       } else {
         lines.push(
           `- Requires ${precondition.type}: \`${precondition.value}\``,
@@ -124,6 +128,10 @@ async function writeSkillReadme(process: ProcessTape): Promise<void> {
       } else if (postcondition.type === "text_contains") {
         lines.push(
           `- \`text_contains\`: \`${postcondition.selector}\` includes \`${postcondition.value}\``,
+        );
+      } else if (postcondition.type === "scoped_text_contains") {
+        lines.push(
+          `- \`scoped_text_contains\`: \`${postcondition.selectors.join(", ")}\` includes \`${postcondition.value}\``,
         );
       } else {
         lines.push(`- \`${postcondition.type}\`: \`${postcondition.value}\``);

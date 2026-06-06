@@ -1,5 +1,5 @@
 import type { CartographerRuntime, Domain } from "./contracts.js";
-import { StagehandBrowserSessionFactory } from "./browser-session.js";
+import { PlaywrightBrowserSessionFactory } from "./browser-session.js";
 import { TaskScopedBrowserSessionFactory } from "./task-browser.js";
 import { JsonStateActionCache } from "./state-action-cache.js";
 import { BasicStateIdentity } from "./state-identity.js";
@@ -12,7 +12,7 @@ export function createRuntime(): CartographerRuntime {
   const logger = new ConsoleCartographerLogger();
   const registry = new PreloadedSkillRegistry(new JsonTapeStore(), logger);
   return new ProcessTapeRuntime(
-    new TaskScopedBrowserSessionFactory(new StagehandBrowserSessionFactory()),
+    new TaskScopedBrowserSessionFactory(new PlaywrightBrowserSessionFactory()),
     new BasicStateIdentity(),
     registry,
     new JsonStateActionCache(),
@@ -28,7 +28,7 @@ export async function createPreloadedRuntime(
   const registry = new PreloadedSkillRegistry(new JsonTapeStore(), logger);
   await registry.preload(domain);
   return new ProcessTapeRuntime(
-    new TaskScopedBrowserSessionFactory(new StagehandBrowserSessionFactory()),
+    new TaskScopedBrowserSessionFactory(new PlaywrightBrowserSessionFactory()),
     new BasicStateIdentity(),
     registry,
     new JsonStateActionCache(),

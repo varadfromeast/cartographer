@@ -1,9 +1,6 @@
 export * from "./contracts.js";
 export * from "./factory.js";
-export {
-  StagehandBrowserSessionFactory,
-  StagehandBrowserSession,
-} from "./browser-session.js";
+export { PlaywrightBrowserSessionFactory } from "./browser-session.js";
 export { NodeCliEmitter } from "./cli-emitter.js";
 export { ProcessTapeRecorder } from "./manual-recorder.js";
 export { DefaultReplayValidator, ProcessTapeRuntime } from "./runtime.js";
@@ -37,6 +34,49 @@ export {
   readPromotionDecisionFile,
 } from "./promotion-decision.js";
 export { createTaskPromotionReviewArtifacts } from "./task-review.js";
+export {
+  compileFallbackAcquisitionReview,
+  compileTaskAcquisitionReview,
+} from "./acquisition-review-compiler.js";
+export {
+  acquisitionCandidates,
+  operationDigest,
+} from "./acquisition-candidates.js";
+export { acquisitionObligations } from "./acquisition-lint.js";
+export { createEvidenceDigest, followerTexts } from "./evidence-digest.js";
+export { fallbackScorecard, taskScorecard } from "./review-scorecard.js";
+export { evaluateFallbackAcquisition } from "./acquisition-eval.js";
+export {
+  analyzeSiteGraph,
+  buildSiteGraph,
+  loadSiteGraph,
+  renderSiteGraphMarkdown,
+} from "./site-graph.js";
+export type {
+  SiteGraph,
+  SiteGraphAction,
+  SiteGraphImplementation,
+  SiteGraphNode,
+  SiteGraphRisk,
+  SiteGraphTrust,
+  SiteGraphWorkflow,
+} from "./site-graph.js";
+export { probeWriteGrounding, scoreWriteSelector } from "./write-grounding.js";
+export {
+  defaultGraphDbPath,
+  findGraphDbPath,
+  importExplorationRunToGraphDb,
+  inspectGraphDbActions,
+  searchGraphDb,
+  summarizeGraphDb,
+} from "./explorer/sqlite-graph.js";
+export type {
+  GraphDbActionsResult,
+  GraphDbImportResult,
+  GraphDbPathResult,
+  GraphDbSearchResult,
+  GraphDbSummary,
+} from "./explorer/sqlite-graph.js";
 export { createOperationSliceTape } from "./operation-slice.js";
 export { candidateSlices } from "./slice-candidates.js";
 export {

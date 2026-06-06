@@ -202,6 +202,7 @@ export class JsonTaskStore {
       input.status === "promoted" ||
       input.status === "rejected" ||
       input.status === "deleted" ||
+      input.status === "rerecord_requested" ||
       input.status === "abandoned"
     ) {
       segment.closedAt = now;

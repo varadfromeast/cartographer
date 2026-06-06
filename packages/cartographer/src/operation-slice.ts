@@ -1,5 +1,5 @@
-import type { Action } from "@browserbasehq/stagehand";
 import type {
+  Action,
   FallbackOperation,
   FallbackTape,
   OperationValueBinding,
@@ -36,9 +36,7 @@ export function createOperationSliceTape(
     isExecutableOperation(operation),
   );
   if (!executable.length) {
-    throw new Error(
-      "Operation slice needs at least one executable goto/click/fill operation.",
-    );
+    throw new Error("Operation slice needs at least one executable operation.");
   }
 
   const argumentBindings = new Map(
@@ -88,12 +86,23 @@ export function createOperationSliceTape(
 }
 
 function isExecutableOperation(operation: FallbackOperation): boolean {
-  return (
-    operation.kind === "goto" ||
-    operation.kind === "click" ||
-    operation.kind === "fill"
-  );
+  return executableOperationKinds.has(operation.kind);
 }
+
+const executableOperationKinds = new Set<FallbackOperation["kind"]>([
+  "goto",
+  "snapshot",
+  "click",
+  "dblclick",
+  "hover",
+  "fill",
+  "type",
+  "press",
+  "check",
+  "uncheck",
+  "select",
+  "upload",
+]);
 
 function operationWritesToPlatform(operation: FallbackOperation): boolean {
   if (operation.writesToPlatform) return true;
@@ -145,12 +154,7 @@ function operationToStep(input: {
       createdAt: input.now,
     }),
     name: `operation_${input.operationIndex}_${input.operation.kind}`,
-    type:
-      input.operation.kind === "goto"
-        ? "navigate"
-        : input.operation.kind === "fill"
-          ? "fill"
-          : "click",
+    type: stepTypeForOperation(input.operation),
     before,
     after,
     atomId,
@@ -179,9 +183,12 @@ function selectorDiagnosticsForOperation(
       ? {
           selector: selectedSelector,
           selectorKind:
-            operation.selectorKind && operation.selectorKind !== "unknown"
-              ? operation.selectorKind
-              : "css",
+            selectedSelector.startsWith("http://") ||
+            selectedSelector.startsWith("https://")
+              ? "url"
+              : operation.selectorKind && operation.selectorKind !== "unknown"
+                ? operation.selectorKind
+                : "css",
           stability: "medium" as const,
           reason: "selected fallback operation selector",
         }
@@ -200,13 +207,11 @@ function operationToAction(
   argName?: string,
   selectorArgName?: string,
 ): Action {
-  const selector = selectorArgName
-    ? parameterizeSelector(operation.selector || "", selectorArgName)
-    : operation.selector || "";
+  const selector = selectorForAction(operation, selectorArgName);
   if (!selector) {
     throw new Error(`Operation ${operation.id} does not have a selector.`);
   }
-  if (operation.kind === "goto") {
+  if (operation.kind === "goto" || operation.kind === "snapshot") {
     return {
       selector,
       method: "goto",
@@ -220,8 +225,59 @@ function operationToAction(
       method: "fill",
       description: operation.instruction,
       arguments: [
-        operation.valuePlaceholder || (argName ? `%${argName}%` : ""),
+        operation.valuePlaceholder ||
+          (argName ? `%${argName}%` : operation.commandArgs?.[1] || ""),
       ].filter(Boolean),
+    };
+  }
+  if (operation.kind === "type") {
+    return {
+      selector,
+      method: "type",
+      description: operation.instruction,
+      arguments: [
+        operation.valuePlaceholder ||
+          (argName
+            ? `%${argName}%`
+            : operation.commandArgs?.slice(1).join(" ") || ""),
+      ].filter(Boolean),
+    };
+  }
+  if (operation.kind === "press") {
+    return {
+      selector,
+      method: "press",
+      description: operation.instruction,
+      arguments: [operation.commandArgs?.[0] || ""].filter(Boolean),
+    };
+  }
+  if (
+    operation.kind === "dblclick" ||
+    operation.kind === "hover" ||
+    operation.kind === "check" ||
+    operation.kind === "uncheck"
+  ) {
+    return {
+      selector,
+      method: operation.kind,
+      description: operation.instruction,
+      arguments: [],
+    };
+  }
+  if (operation.kind === "select") {
+    return {
+      selector,
+      method: "select",
+      description: operation.instruction,
+      arguments: operation.commandArgs?.slice(1) || [],
+    };
+  }
+  if (operation.kind === "upload") {
+    return {
+      selector,
+      method: "upload",
+      description: operation.instruction,
+      arguments: operation.commandArgs?.slice(1) || [],
     };
   }
   return {
@@ -230,6 +286,39 @@ function operationToAction(
     description: operation.instruction,
     arguments: [],
   };
+}
+
+function selectorForAction(
+  operation: FallbackOperation,
+  selectorArgName?: string,
+): string {
+  const rawSelector =
+    operation.kind === "snapshot"
+      ? operation.urlAfter || operation.urlBefore || ""
+      : operation.kind === "press" || operation.kind === "type"
+        ? keyboardTargetSelector(operation)
+        : operation.selector || "";
+  return selectorArgName
+    ? parameterizeSelector(rawSelector, selectorArgName)
+    : rawSelector;
+}
+
+function keyboardTargetSelector(operation: FallbackOperation): string {
+  const selector = operation.selector || "";
+  const firstArg = operation.commandArgs?.[0] || "";
+  if (!selector || selector === firstArg) return "body";
+  return selector;
+}
+
+function stepTypeForOperation(operation: FallbackOperation): TapeStep["type"] {
+  if (operation.kind === "goto") return "navigate";
+  if (operation.kind === "snapshot") return "navigate";
+  if (operation.kind === "fill" || operation.kind === "type") return "fill";
+  if (operation.kind === "select") return "select";
+  if (operation.kind === "upload") return "upload";
+  if (operation.kind === "press") return "submit";
+  if (operation.kind === "hover") return "hover";
+  return "click";
 }
 
 function argsForSlice(
@@ -271,6 +360,9 @@ function parameterizeSelector(selector: string, argName: string): string {
       /^https:\/\/instagram\.com\/[^/?#]+\/?/,
       `https://instagram.com/${placeholder}/`,
     );
+  }
+  if (selector.startsWith("role=button[name=")) {
+    return selector.replace(/\[name=.+\]$/, `[name=/${placeholder}/]`);
   }
   if (selector.includes(`"`)) {
     return selector.replace(/"[^"]+"/, `"${placeholder}"`);

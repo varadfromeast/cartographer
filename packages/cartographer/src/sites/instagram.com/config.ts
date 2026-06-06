@@ -10,6 +10,9 @@ export const instagramConfig: SiteConfig = {
       name: "Instagram Cookie Consent",
       dismissSelector: "button:has-text('Decline optional cookies')",
     },
-    { name: "Instagram App Promotion", dismissSelector: "button:has-text('Not Now')" },
+    {
+      name: "Instagram App Promotion",
+      dismissSelector: "button:has-text('Not Now')",
+    },
   ],
 };

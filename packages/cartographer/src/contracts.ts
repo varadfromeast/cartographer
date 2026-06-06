@@ -1,6 +1,8 @@
-import type { Action } from "@browserbasehq/stagehand";
-
-export type Domain = "instagram.com";
+export type Domain =
+  | "instagram.com"
+  | "linkedin.com"
+  | "x.com"
+  | "ycombinator.com";
 export type StateId = string;
 export type AtomId = string;
 export type StepId = string;
@@ -24,10 +26,22 @@ export type StateKind =
   | "thread"
   | "unknown";
 
-export type OpType = "click" | "fill" | "submit" | "navigate";
+export type OpType =
+  | "click"
+  | "fill"
+  | "submit"
+  | "navigate"
+  | "hover"
+  | "select"
+  | "upload";
 export type StepStatus = "recorded" | "replayed" | "self_healed" | "drifted";
 export type EvidenceKind = "screenshot" | "text";
-export type FallbackStatus = "succeeded" | "failed" | "rejected";
+export type VisualReviewVerdict = "passed" | "failed" | "unclear" | "pending";
+export type FallbackStatus =
+  | "succeeded"
+  | "failed"
+  | "rejected"
+  | "rerecord_requested";
 export type FallbackOperationKind =
   | "open"
   | "goto"
@@ -38,6 +52,10 @@ export type FallbackOperationKind =
   | "fill"
   | "type"
   | "press"
+  | "check"
+  | "uncheck"
+  | "select"
+  | "upload"
   | "wait"
   | "eval"
   | "generate_locator"
@@ -89,6 +107,46 @@ export interface EvidenceArtifact {
   createdAt: string;
 }
 
+export interface VisualReviewArtifact {
+  schemaVersion: 1;
+  id: string;
+  domain: Domain;
+  subject: {
+    kind: "runtime_process" | "fallback_tape" | "fallback_operation";
+    processName?: ProcessName;
+    fallbackTapeId?: FallbackTapeId;
+    operationId?: string;
+    taskId?: TaskId;
+  };
+  status: "pending" | "reviewed" | "skipped";
+  reviewer: "vlm" | "agent" | "manual";
+  model?: string;
+  source: {
+    type: "final_screenshot";
+    screenshotPath: string;
+    url?: string;
+    capturedAt: string;
+  };
+  question: string;
+  expected: string;
+  checks: string[];
+  postconditions: Postcondition[];
+  result?: {
+    verdict: Exclude<VisualReviewVerdict, "pending">;
+    confidence?: number;
+    reason: string;
+    reviewedAt: string;
+  };
+  createdAt: string;
+}
+
+export interface Action {
+  selector: string;
+  method?: string;
+  arguments?: string[];
+  description?: string;
+}
+
 export interface TapeStep {
   id: StepId;
   name: string;
@@ -112,6 +170,8 @@ export interface SelectorDiagnosticCandidate {
   stability: "strong" | "medium" | "weak";
   reason: string;
   matchCount?: number;
+  score?: number;
+  scoreReasons?: string[];
 }
 
 export interface StepSelectorDiagnostics {
@@ -123,13 +183,26 @@ export type StepValidator =
   | { type: "url_equals"; value: string }
   | { type: "url_contains"; value: string }
   | { type: "selector_exists"; selector: string }
-  | { type: "text_contains"; selector: string; value: string };
+  | { type: "text_contains"; selector: string; value: string }
+  | { type: "scoped_text_contains"; selectors: string[]; value: string }
+  | {
+      type: "rendered_text_contains";
+      selector: string;
+      value: string;
+      excludeSelectors?: string[];
+    };
 
 export interface ProcessOutput {
   name: string;
   source: "text";
   selector: string;
   description: string;
+  transform?: {
+    type: "raw_text" | "compact_lines" | "notification_rows";
+    limit?: number;
+    includePatterns?: string[];
+    excludePatterns?: string[];
+  };
 }
 
 export type Postcondition = StepValidator;
@@ -150,6 +223,7 @@ export interface FallbackTape {
   steps: TapeStep[];
   operations?: FallbackOperation[];
   evidence: EvidenceArtifact[];
+  visualReviews?: VisualReviewArtifact[];
   args: ProcessArg[];
   writesToPlatform: boolean;
   recordingStartedAt?: string;
@@ -157,6 +231,10 @@ export interface FallbackTape {
   completedAt: string;
   rejectedAt?: string;
   rejectedReason?: string;
+  rerecordRequestedAt?: string;
+  rerecordReason?: string;
+  rerecordInstructions?: string;
+  rerecordTargetCommandName?: ProcessName;
   promotedAt?: string;
   promotedProcessName?: ProcessName;
 }
@@ -172,11 +250,13 @@ export interface FallbackOperation {
   selector?: string;
   selectorKind?: "xpath" | "css" | "url" | "playwright" | "unknown";
   selectorCandidates?: SelectorDiagnosticCandidate[];
+  writeGrounding?: WriteGroundingSummary;
   valuePlaceholder?: string;
   evidencePath?: string;
   evidencePaths?: Record<string, string>;
   evidenceSummaryPath?: string;
   evidenceSummary?: PlaywrightCliEvidenceSummary;
+  visualReview?: VisualReviewArtifact;
   stepId?: StepId;
   command?: string;
   commandArgs?: string[];
@@ -212,6 +292,8 @@ export interface PlaywrightCliEvidenceSummary {
   };
   controls: SnapshotControlSummary[];
   selectorCandidates: SelectorDiagnosticCandidate[];
+  writeGrounding?: WriteGroundingSummary;
+  actionDiscovery?: CachedActionDiscovery;
   warnings: string[];
   preview: string[];
   createdAt: string;
@@ -222,6 +304,54 @@ export interface SnapshotControlSummary {
   role: string;
   name?: string;
   href?: string;
+}
+
+export interface WriteGroundingSummary {
+  command: string;
+  writeAdjacent: boolean;
+  urlScope?: string;
+  recommendedSelector?: string;
+  promotionReady: boolean;
+  candidates: WriteGroundingCandidate[];
+  postconditionHints: Postcondition[];
+  warnings: string[];
+}
+
+export interface WriteGroundingCandidate {
+  selector: string;
+  selectorKind: "xpath" | "css" | "url" | "playwright";
+  score: number;
+  promotionReady: boolean;
+  reasons: string[];
+  penalties: string[];
+  matchCount: number;
+  visible: boolean;
+  enabled: boolean;
+  role?: string;
+  accessibleName?: string;
+  placeholder?: string;
+  label?: string;
+  ariaLabel?: string;
+  ariaDescription?: string;
+  contenteditable?: boolean;
+  formOwner?: string;
+  nearbyStableText?: string;
+  urlScope?: string;
+}
+
+export interface CachedActionDiscovery {
+  cacheKey: string;
+  source: "deterministic_grounding";
+  actions: CachedDiscoveredAction[];
+}
+
+export interface CachedDiscoveredAction {
+  description: string;
+  method: "click" | "fill" | "type" | "press";
+  selector: string;
+  arguments: string[];
+  score: number;
+  promotionReady: boolean;
 }
 
 export interface FallbackReviewPacket {
@@ -236,6 +366,7 @@ export interface FallbackReviewPacket {
   writesToPlatform: boolean;
   args: ProcessArg[];
   evidence: EvidenceArtifact[];
+  visualReviews?: VisualReviewArtifact[];
   evidencePreview: EvidencePreview[];
   reviewPath?: string;
   reviewRequestPath?: string;
@@ -259,7 +390,8 @@ export type TaskSegmentStatus =
   | "abandoned"
   | "promoted"
   | "rejected"
-  | "deleted";
+  | "deleted"
+  | "rerecord_requested";
 
 export interface TaskSegmentReference {
   segmentId: TaskSegmentId;
@@ -351,6 +483,7 @@ export interface FallbackPromotionSummary {
   steps: FallbackStepSummary[];
   operations: FallbackOperation[];
   evidence: EvidencePreview[];
+  visualReviews: VisualReviewArtifact[];
   mechanicalHints: MechanicalPromotionHints;
 }
 
@@ -398,6 +531,168 @@ export interface MechanicalPromotionHints {
   textEvidenceSelectors: string[];
 }
 
+export type EasyToPromoteRank = "low" | "medium" | "high";
+
+export type AcquisitionCandidateKind =
+  | "navigation"
+  | "state_transition"
+  | "read_output"
+  | "write_command"
+  | "repair"
+  | "remainder";
+
+export interface ObservedText {
+  text: string;
+  label: string;
+  evidencePath: string;
+  operationIndex?: number;
+  selector?: string;
+}
+
+export interface ObservedLink {
+  text: string;
+  href: string;
+  evidencePath: string;
+  operationIndex?: number;
+}
+
+export interface RepeatedTextPattern {
+  name: string;
+  values: string[];
+  evidencePaths: string[];
+  count: number;
+}
+
+export interface EvidenceProvenance {
+  value: string;
+  destinationOperationIndex: number;
+  destinationEvidencePath?: string;
+  sourceEvidencePaths: string[];
+  matchedPatterns: string[];
+}
+
+export interface PageKindSignal {
+  kind:
+    | "instagram_profile"
+    | "instagram_search_results"
+    | "instagram_direct_inbox"
+    | "instagram_direct_thread"
+    | "unknown";
+  confidence: EasyToPromoteRank;
+  url?: string;
+  evidencePath?: string;
+  reason: string;
+}
+
+export interface EvidenceDigest {
+  observedTexts: ObservedText[];
+  observedLinks: ObservedLink[];
+  observedControls: SnapshotControlSummary[];
+  repeatedTextPatterns: RepeatedTextPattern[];
+  pageKinds: PageKindSignal[];
+  finalOutputProvenance: EvidenceProvenance[];
+}
+
+export interface OperationDigest {
+  operationCount: number;
+  executableCount: number;
+  writeCount: number;
+  snapshotCount: number;
+  weakSelectorCount: number;
+  urlsVisited: string[];
+}
+
+export interface AcquisitionCandidate {
+  id: string;
+  reviewItemId: string;
+  fallbackTapeId: FallbackTapeId;
+  kind: AcquisitionCandidateKind;
+  operationIndexes?: number[];
+  evidencePaths: string[];
+  deterministicReason: string;
+  suggestedCommandName?: ProcessName;
+  suggestedDescription?: string;
+  suggestedArgs?: ProcessArg[];
+  suggestedOutputs?: ProcessOutput[];
+  suggestedValueBindings?: OperationValueBinding[];
+  suggestedPostconditions?: Postcondition[];
+  suggestedStateScope?: CommandStateScope;
+  riskFlags: string[];
+  harnessEasyToPromote: EasyToPromoteRank;
+  agentMustRate: true;
+}
+
+export interface AcquisitionObligation {
+  id: string;
+  severity: "blocker" | "warning" | "info";
+  code:
+    | "data_used_without_output_contract"
+    | "repeated_snapshot_scrape"
+    | "write_action_without_promotable_candidate"
+    | "weak_write_selectors"
+    | "task_metric_without_read_candidate"
+    | "candidate_missing_disposition"
+    | "snapshot_only_final_answer";
+  message: string;
+  evidencePaths: string[];
+  relatedCandidateIds: string[];
+  requiredDisposition:
+    | "promote_or_reject"
+    | "rerecord_or_reject"
+    | "acknowledge";
+}
+
+export interface FallbackAcquisitionScorecard {
+  easyToPromote: EasyToPromoteRank;
+  acquisitionQuality: "strong" | "acceptable" | "thin" | "poor";
+  candidateCount: number;
+  highValueCandidateCount: number;
+  obligationCount: number;
+  blockerCount: number;
+  dataOutputCandidateCount: number;
+  writeCandidateCount: number;
+  reasoning: string;
+}
+
+export interface TaskAcquisitionScorecard {
+  executionStatus: "complete" | "incomplete";
+  lifecycleStatus: TaskFileStatus;
+  promotedCount: number;
+  rejectedCount: number;
+  deletedCount: number;
+  rerecordRecommendedCount: number;
+  dataUsedWithoutOutputCount: number;
+  writeCandidatesRejectedOrWeakCount: number;
+  candidateCoverage: "complete" | "partial" | "thin";
+  acquisitionQuality: "strong" | "acceptable" | "thin" | "poor";
+  reasoning: string;
+}
+
+export interface CompiledFallbackReview {
+  fallbackTapeId: FallbackTapeId;
+  intent: string;
+  status: FallbackStatus;
+  writesToPlatform: boolean;
+  operationDigest: OperationDigest;
+  evidenceDigest: EvidenceDigest;
+  candidates: AcquisitionCandidate[];
+  obligations: AcquisitionObligation[];
+  scorecard: FallbackAcquisitionScorecard;
+  deepEvidencePaths: string[];
+}
+
+export interface CompiledTaskReview {
+  schemaVersion: 1;
+  domain: Domain;
+  taskId: TaskId;
+  taskIntent: string;
+  existingCommands: ProcessTapeSummary[];
+  scorecard: TaskAcquisitionScorecard;
+  obligations: AcquisitionObligation[];
+  fallbacks: CompiledFallbackReview[];
+  prompt: string;
+}
+
 export interface EvidencePreview {
   kind: EvidenceKind;
   label: string;
@@ -436,6 +731,15 @@ export interface FallbackTapeStore {
   ): Promise<void>;
   reject(domain: Domain, id: FallbackTapeId, reason: string): Promise<void>;
   delete(domain: Domain, id: FallbackTapeId): Promise<void>;
+  requestRerecord(
+    domain: Domain,
+    id: FallbackTapeId,
+    input: {
+      reason: string;
+      instructions?: string;
+      targetCommandName?: ProcessName;
+    },
+  ): Promise<void>;
 }
 
 export interface PromotionStore {
@@ -534,6 +838,10 @@ export interface BrowserSession {
   actRaw(action: Action, args?: RuntimeArgs): Promise<ActOutcome>;
   exists(selector: string): Promise<boolean>;
   readText(selector?: string): Promise<string>;
+  readTextExcluding(
+    selector: string,
+    excludeSelectors: string[],
+  ): Promise<string>;
   isVisible(selector: string): Promise<boolean>;
   isEnabled(selector: string): Promise<boolean>;
   scrollIntoView(selector: string): Promise<void>;
@@ -554,6 +862,7 @@ export interface LaunchOptions {
   headless: boolean;
   viewport: { width: number; height: number };
   taskId?: TaskId;
+  profile?: string;
 }
 
 export interface ObservedCandidate {
@@ -665,7 +974,7 @@ export interface BrowserFallbackRecorder {
   createFallbackTape(input: CreateFallbackTapeInput): Promise<FallbackTape>;
 }
 
-export type FallbackEngineName = "stagehand" | "playwright";
+export type FallbackEngineName = "playwright";
 
 export interface FallbackEngine {
   name: FallbackEngineName;
@@ -802,6 +1111,7 @@ export type PromotionDecision =
       reviewItemId?: string;
       reasoning: string;
       confidence: PromotionDecisionConfidence;
+      agentEasyToPromote?: EasyToPromoteRank;
       duplicateJudgment?: DuplicateJudgment;
       candidateSliceId?: string;
       operationIndexes?: number[];
@@ -821,6 +1131,7 @@ export type PromotionDecision =
       operationIndexes?: number[];
       reasoning: string;
       confidence: PromotionDecisionConfidence;
+      agentEasyToPromote?: EasyToPromoteRank;
       duplicateJudgment?: DuplicateJudgment;
       rejectReason: string;
     }
@@ -830,6 +1141,20 @@ export type PromotionDecision =
       reviewItemId?: string;
       reasoning: string;
       confidence: PromotionDecisionConfidence;
+      agentEasyToPromote?: EasyToPromoteRank;
+    }
+  | {
+      action: "rerecord";
+      fallbackTapeId: FallbackTapeId;
+      reviewItemId?: string;
+      candidateSliceId?: string;
+      operationIndexes?: number[];
+      reasoning: string;
+      confidence: PromotionDecisionConfidence;
+      agentEasyToPromote?: EasyToPromoteRank;
+      rerecordReason: string;
+      rerecordInstructions?: string;
+      suggestedCommandName?: ProcessName;
     };
 
 export interface OperationValueBinding {
@@ -843,6 +1168,16 @@ export interface PromotionBatchDecision {
   taskId: TaskId;
   reasoning: string;
   confidence: PromotionDecisionConfidence;
+  scorecardReview?: {
+    acquisitionQuality: "strong" | "acceptable" | "thin" | "poor";
+    reasoning: string;
+  };
+  obligationDispositions?: Array<{
+    obligationId: string;
+    action: "promote" | "reject" | "delete" | "rerecord" | "acknowledge";
+    relatedReviewItemIds?: string[];
+    reasoning: string;
+  }>;
   decisions: PromotionDecision[];
 }
 
@@ -863,6 +1198,7 @@ export interface PromotionReviewRequest {
   reviewPath: string;
   reviewPacket: FallbackReviewPacket;
   fallbackSummary: FallbackPromotionSummary;
+  acquisition?: CompiledFallbackReview;
   existingCommands: ProcessTapeSummary[];
   duplicateCandidates: DuplicateCandidate[];
   policy: {
@@ -936,6 +1272,7 @@ export interface TaskFallbackReviewItem {
   reviewPath?: string;
   duplicateCandidates: DuplicateCandidate[];
   riskFlags: string[];
+  acquisition?: CompiledFallbackReview;
 }
 
 export interface TaskPromotionReviewRequest {
@@ -949,6 +1286,7 @@ export interface TaskPromotionReviewRequest {
   reviewPath: string;
   existingCommands: ProcessTapeSummary[];
   fallbacks: TaskFallbackReviewItem[];
+  acquisition?: CompiledTaskReview;
   policy: {
     name: "v1";
     hardRules: string[];
@@ -962,7 +1300,14 @@ export interface PromotionDecisionApplyResult {
   result:
     | { action: "promote"; promotion: PromotionResult }
     | { action: "reject"; rejected: FallbackTapeId; reason: string }
-    | { action: "delete"; deleted: FallbackTapeId };
+    | { action: "delete"; deleted: FallbackTapeId }
+    | {
+        action: "rerecord";
+        fallbackTapeId: FallbackTapeId;
+        reason: string;
+        instructions?: string;
+        suggestedCommandName?: ProcessName;
+      };
 }
 
 export interface PromotionDecisionApplier {
@@ -1076,6 +1421,7 @@ export interface RunProcessResult {
   preconditions?: PostconditionResult;
   postconditions?: PostconditionResult;
   drift?: DriftReport;
+  visualReview?: VisualReviewArtifact;
   failure?: RunFailure;
   suggestedAutoEnterProcessName?: ProcessName;
   fallbackRecommended?: boolean;
