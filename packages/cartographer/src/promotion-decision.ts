@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
+  AcquisitionCandidate,
   CandidateOperationSlice,
   CommandStateScope,
   Domain,
@@ -43,6 +44,7 @@ import {
   PROMOTION_POLICY_HARD_RULES,
   PROMOTION_REVIEW_PROMPT,
 } from "./promotion-review-prompt.js";
+import { compileFallbackAcquisitionReview } from "./acquisition-review-compiler.js";
 
 export async function createPromotionReviewArtifacts(input: {
   domain: Domain;
@@ -68,6 +70,7 @@ export async function createPromotionReviewArtifacts(input: {
     tape,
     reviewPacket.evidencePreview,
   );
+  const acquisition = await compileFallbackAcquisitionReview({ tape });
   const existingCommands = Object.values(catalog?.processes || {}).sort(
     (a, b) => a.name.localeCompare(b.name),
   );
@@ -82,6 +85,7 @@ export async function createPromotionReviewArtifacts(input: {
     reviewPath,
     reviewPacket,
     fallbackSummary,
+    acquisition,
     existingCommands,
     duplicateCandidates,
     policy: {
@@ -182,6 +186,28 @@ export class DefaultPromotionDecisionApplier
       };
     }
 
+    if (normalized.action === "rerecord") {
+      await this.fallbackStore.requestRerecord(
+        domain,
+        normalized.fallbackTapeId,
+        {
+          reason: normalized.rerecordReason,
+          instructions: normalized.rerecordInstructions,
+          targetCommandName: normalized.suggestedCommandName,
+        },
+      );
+      return {
+        decision: normalized,
+        result: {
+          action: "rerecord",
+          fallbackTapeId: normalized.fallbackTapeId,
+          reason: normalized.rerecordReason,
+          instructions: normalized.rerecordInstructions,
+          suggestedCommandName: normalized.suggestedCommandName,
+        },
+      };
+    }
+
     await this.fallbackStore.delete(domain, normalized.fallbackTapeId);
     return {
       decision: normalized,
@@ -223,6 +249,11 @@ export function normalizePromotionBatchDecision(
     taskId: stringField(input, "taskId"),
     reasoning: stringField(input, "reasoning"),
     confidence: confidenceField(input, "confidence"),
+    scorecardReview: optionalScorecardReviewField(input, "scorecardReview"),
+    obligationDispositions: optionalObligationDispositionsField(
+      input,
+      "obligationDispositions",
+    ),
     decisions: decisions.map(normalizePromotionDecision),
   };
 }
@@ -246,6 +277,10 @@ export function normalizePromotionDecision(input: unknown): PromotionDecision {
       reviewItemId,
       reasoning,
       confidence,
+      agentEasyToPromote: optionalEasyToPromoteField(
+        input,
+        "agentEasyToPromote",
+      ),
       commandName: stringField(input, "commandName"),
       description: stringField(input, "description"),
       postconditions,
@@ -271,6 +306,10 @@ export function normalizePromotionDecision(input: unknown): PromotionDecision {
       operationIndexes: optionalNumberArrayField(input, "operationIndexes"),
       reasoning,
       confidence,
+      agentEasyToPromote: optionalEasyToPromoteField(
+        input,
+        "agentEasyToPromote",
+      ),
       rejectReason: stringField(input, "rejectReason"),
       duplicateJudgment: optionalDuplicateJudgmentField(
         input,
@@ -286,6 +325,29 @@ export function normalizePromotionDecision(input: unknown): PromotionDecision {
       reviewItemId,
       reasoning,
       confidence,
+      agentEasyToPromote: optionalEasyToPromoteField(
+        input,
+        "agentEasyToPromote",
+      ),
+    };
+  }
+
+  if (action === "rerecord") {
+    return {
+      action,
+      fallbackTapeId,
+      reviewItemId,
+      candidateSliceId: optionalStringField(input, "candidateSliceId"),
+      operationIndexes: optionalNumberArrayField(input, "operationIndexes"),
+      reasoning,
+      confidence,
+      agentEasyToPromote: optionalEasyToPromoteField(
+        input,
+        "agentEasyToPromote",
+      ),
+      rerecordReason: stringField(input, "rerecordReason"),
+      rerecordInstructions: optionalStringField(input, "rerecordInstructions"),
+      suggestedCommandName: optionalStringField(input, "suggestedCommandName"),
     };
   }
 
@@ -300,11 +362,12 @@ export function createPromotionDecisionSchema(): PromotionDecisionSchema {
       additionalProperties: false,
       required: ["action", "fallbackTapeId", "reasoning", "confidence"],
       properties: {
-        action: { enum: ["promote", "reject", "delete"] },
+        action: { enum: ["promote", "reject", "delete", "rerecord"] },
         fallbackTapeId: { type: "string", minLength: 1 },
         reviewItemId: { type: "string", minLength: 1 },
         reasoning: { type: "string", minLength: 1 },
         confidence: { enum: ["low", "medium", "high"] },
+        agentEasyToPromote: { enum: ["low", "medium", "high"] },
         candidateSliceId: { type: "string", minLength: 1 },
         operationIndexes: {
           type: "array",
@@ -321,6 +384,25 @@ export function createPromotionDecisionSchema(): PromotionDecisionSchema {
               name: { type: "string", pattern: "^[a-z][a-zA-Z0-9_]*$" },
               required: { type: "boolean" },
               description: { type: "string", minLength: 1 },
+              transform: {
+                type: "object",
+                required: ["type"],
+                additionalProperties: false,
+                properties: {
+                  type: {
+                    enum: ["raw_text", "compact_lines", "notification_rows"],
+                  },
+                  limit: { type: "number", minimum: 1 },
+                  includePatterns: {
+                    type: "array",
+                    items: { type: "string", minLength: 1 },
+                  },
+                  excludePatterns: {
+                    type: "array",
+                    items: { type: "string", minLength: 1 },
+                  },
+                },
+              },
             },
           },
         },
@@ -371,6 +453,9 @@ export function createPromotionDecisionSchema(): PromotionDecisionSchema {
           },
         },
         rejectReason: { type: "string", minLength: 1 },
+        rerecordReason: { type: "string", minLength: 1 },
+        rerecordInstructions: { type: "string", minLength: 1 },
+        suggestedCommandName: { type: "string", pattern: "^[a-z][a-z0-9_]*$" },
       },
       allOf: [
         {
@@ -380,6 +465,10 @@ export function createPromotionDecisionSchema(): PromotionDecisionSchema {
         {
           if: { properties: { action: { const: "reject" } } },
           then: { required: ["rejectReason"] },
+        },
+        {
+          if: { properties: { action: { const: "rerecord" } } },
+          then: { required: ["rerecordReason"] },
         },
       ],
     },
@@ -415,8 +504,26 @@ function postconditionArraySchema(options: { minItems?: number } = {}) {
           required: ["type", "selector", "value"],
           additionalProperties: false,
           properties: {
-            type: { const: "text_contains" },
+            type: { enum: ["text_contains", "rendered_text_contains"] },
             selector: { type: "string", minLength: 1 },
+            value: { type: "string", minLength: 1 },
+            excludeSelectors: {
+              type: "array",
+              items: { type: "string", minLength: 1 },
+            },
+          },
+        },
+        {
+          type: "object",
+          required: ["type", "selectors", "value"],
+          additionalProperties: false,
+          properties: {
+            type: { const: "scoped_text_contains" },
+            selectors: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string", minLength: 1 },
+            },
             value: { type: "string", minLength: 1 },
           },
         },
@@ -452,6 +559,42 @@ export function createPromotionBatchDecisionSchema(): PromotionDecisionSchema {
         taskId: { type: "string", minLength: 1 },
         reasoning: { type: "string", minLength: 1 },
         confidence: { enum: ["low", "medium", "high"] },
+        scorecardReview: {
+          type: "object",
+          required: ["acquisitionQuality", "reasoning"],
+          additionalProperties: false,
+          properties: {
+            acquisitionQuality: {
+              enum: ["strong", "acceptable", "thin", "poor"],
+            },
+            reasoning: { type: "string", minLength: 1 },
+          },
+        },
+        obligationDispositions: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["obligationId", "action", "reasoning"],
+            additionalProperties: false,
+            properties: {
+              obligationId: { type: "string", minLength: 1 },
+              action: {
+                enum: [
+                  "promote",
+                  "reject",
+                  "delete",
+                  "rerecord",
+                  "acknowledge",
+                ],
+              },
+              relatedReviewItemIds: {
+                type: "array",
+                items: { type: "string", minLength: 1 },
+              },
+              reasoning: { type: "string", minLength: 1 },
+            },
+          },
+        },
         decisions: {
           type: "array",
           minItems: 1,
@@ -497,6 +640,9 @@ export function createPromotionBatchDecisionTemplate(input: {
   fallbacks: Array<{
     fallbackTapeId: FallbackTapeId;
     candidateSlices: CandidateOperationSlice[];
+    acquisition?: {
+      candidates: AcquisitionCandidate[];
+    };
   }>;
 }): PromotionBatchDecision {
   const decisions: PromotionDecision[] = [];
@@ -517,6 +663,7 @@ export function createPromotionBatchDecisionTemplate(input: {
           operationIndexes: slice.operationIndexes,
           reasoning: `Existing command ${slice.suggestedCommandName} already covers this suggested command name. Use the existing CLI command instead of promoting a duplicate.`,
           confidence: "high",
+          agentEasyToPromote: "low",
           rejectReason: "duplicate of existing command",
         });
         continue;
@@ -530,6 +677,7 @@ export function createPromotionBatchDecisionTemplate(input: {
         reasoning:
           "Promotion-ready candidate slice. Verify this slice is reusable independently of noisy sibling operations before applying.",
         confidence: "medium",
+        agentEasyToPromote: "medium",
         commandName: slice.suggestedCommandName,
         description: slice.suggestedDescription,
         args: slice.suggestedArgs,
@@ -538,6 +686,60 @@ export function createPromotionBatchDecisionTemplate(input: {
         postconditions: slice.suggestedPostconditions,
         outputs: slice.suggestedOutputs,
       });
+      existingCommandNames.add(slice.suggestedCommandName);
+    }
+    for (const candidate of fallback.acquisition?.candidates || []) {
+      if (!isPromotionReadyAcquisitionCandidate(candidate)) {
+        if (candidate.kind === "repair" && candidate.suggestedCommandName) {
+          decisions.push({
+            action: "rerecord",
+            fallbackTapeId: fallback.fallbackTapeId,
+            reviewItemId: candidate.reviewItemId,
+            operationIndexes: candidate.operationIndexes,
+            reasoning:
+              "Valuable candidate, but it needs reacquisition with durable selectors before promotion.",
+            confidence: "medium",
+            agentEasyToPromote: candidate.harnessEasyToPromote,
+            rerecordReason:
+              "Current evidence used weak or transient write selectors.",
+            rerecordInstructions:
+              "Rerun the narrow flow in the task shell, use semantic composer selectors such as role/name, label, placeholder, or aria selectors, and verify rendered final state outside the composer.",
+            suggestedCommandName: candidate.suggestedCommandName,
+          });
+        }
+        continue;
+      }
+      if (existingCommandNames.has(candidate.suggestedCommandName)) {
+        decisions.push({
+          action: "reject",
+          fallbackTapeId: fallback.fallbackTapeId,
+          reviewItemId: candidate.reviewItemId,
+          operationIndexes: candidate.operationIndexes,
+          reasoning: `Existing command ${candidate.suggestedCommandName} already covers this suggested command name. Use the existing CLI command instead of promoting a duplicate.`,
+          confidence: "high",
+          agentEasyToPromote: "low",
+          rejectReason: "duplicate of existing command",
+        });
+        continue;
+      }
+      decisions.push({
+        action: "promote",
+        fallbackTapeId: fallback.fallbackTapeId,
+        reviewItemId: candidate.reviewItemId,
+        operationIndexes: candidate.operationIndexes,
+        reasoning:
+          "Promotion-ready acquisition candidate. Verify the output contract is reusable before applying.",
+        confidence: "medium",
+        agentEasyToPromote: candidate.harnessEasyToPromote,
+        commandName: candidate.suggestedCommandName,
+        description: candidate.suggestedDescription,
+        args: candidate.suggestedArgs,
+        valueBindings: candidate.suggestedValueBindings,
+        stateScope: candidate.suggestedStateScope,
+        postconditions: candidate.suggestedPostconditions,
+        outputs: candidate.suggestedOutputs,
+      });
+      existingCommandNames.add(candidate.suggestedCommandName);
     }
     decisions.push({
       action: "reject",
@@ -546,6 +748,7 @@ export function createPromotionBatchDecisionTemplate(input: {
       reasoning:
         "Reject the remaining whole fallback after independently promoting or rejecting reusable candidate slices.",
       confidence: "medium",
+      agentEasyToPromote: "low",
       rejectReason:
         "Whole fallback is broader/noisier than the isolated reusable slices.",
     });
@@ -556,8 +759,33 @@ export function createPromotionBatchDecisionTemplate(input: {
     reasoning:
       "Review all fallback tapes for this task. Decide every promotion-ready candidate slice independently; reject only the remaining whole fallback/noisy slices.",
     confidence: "medium",
+    scorecardReview: {
+      acquisitionQuality: "thin",
+      reasoning:
+        "Replace this with the agent's honest assessment of acquisition quality after handling obligations.",
+    },
+    obligationDispositions: [],
     decisions,
   };
+}
+
+function isPromotionReadyAcquisitionCandidate(
+  candidate: AcquisitionCandidate,
+): candidate is AcquisitionCandidate & {
+  suggestedCommandName: ProcessName;
+  suggestedDescription: string;
+  suggestedPostconditions: Postcondition[];
+} {
+  return Boolean(
+    (candidate.kind === "read_output" ||
+      candidate.kind === "write_command" ||
+      candidate.kind === "navigation" ||
+      candidate.kind === "state_transition") &&
+      candidate.suggestedCommandName &&
+      candidate.suggestedDescription &&
+      candidate.suggestedPostconditions?.length &&
+      candidate.harnessEasyToPromote !== "low",
+  );
 }
 
 function isPromotionReadySlice(
@@ -570,7 +798,9 @@ function isPromotionReadySlice(
   return Boolean(
     slice.suggestedCommandName &&
       slice.suggestedDescription &&
-      slice.suggestedPostconditions?.length,
+      slice.suggestedPostconditions?.length &&
+      !slice.riskFlags?.includes("weak_write_selectors") &&
+      !slice.riskFlags?.includes("rerecord_recommended"),
   );
 }
 
@@ -747,6 +977,76 @@ function confidenceField(
   );
 }
 
+function optionalEasyToPromoteField(
+  input: Record<string, unknown>,
+  field: string,
+): "low" | "medium" | "high" | undefined {
+  const value = input[field];
+  if (value === undefined) return undefined;
+  if (value === "low" || value === "medium" || value === "high") return value;
+  throw new Error(`${field} must be low, medium, or high when provided.`);
+}
+
+function optionalScorecardReviewField(
+  input: Record<string, unknown>,
+  field: string,
+): PromotionBatchDecision["scorecardReview"] {
+  const value = input[field];
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`${field} must be an object.`);
+  const acquisitionQuality = stringField(value, "acquisitionQuality");
+  if (
+    acquisitionQuality !== "strong" &&
+    acquisitionQuality !== "acceptable" &&
+    acquisitionQuality !== "thin" &&
+    acquisitionQuality !== "poor"
+  ) {
+    throw new Error(
+      `${field}.acquisitionQuality must be strong, acceptable, thin, or poor.`,
+    );
+  }
+  return {
+    acquisitionQuality,
+    reasoning: stringField(value, "reasoning"),
+  };
+}
+
+function optionalObligationDispositionsField(
+  input: Record<string, unknown>,
+  field: string,
+): PromotionBatchDecision["obligationDispositions"] {
+  const value = input[field];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array.`);
+  return value.map((item) => {
+    if (!isRecord(item)) throw new Error(`${field} entries must be objects.`);
+    const action = stringField(item, "action");
+    if (
+      action !== "promote" &&
+      action !== "reject" &&
+      action !== "delete" &&
+      action !== "rerecord" &&
+      action !== "acknowledge"
+    ) {
+      throw new Error(`${field}.action has an unsupported value.`);
+    }
+    const relatedReviewItemIds = item.relatedReviewItemIds;
+    if (
+      relatedReviewItemIds !== undefined &&
+      (!Array.isArray(relatedReviewItemIds) ||
+        relatedReviewItemIds.some((value) => typeof value !== "string"))
+    ) {
+      throw new Error(`${field}.relatedReviewItemIds must be strings.`);
+    }
+    return {
+      obligationId: stringField(item, "obligationId"),
+      action,
+      relatedReviewItemIds: relatedReviewItemIds as string[] | undefined,
+      reasoning: stringField(item, "reasoning"),
+    };
+  });
+}
+
 function postconditionsField(
   input: Record<string, unknown>,
   field: string,
@@ -811,7 +1111,45 @@ function normalizePostcondition(input: unknown): Postcondition {
       value: stringField(input, "value"),
     };
   }
+  if (type === "scoped_text_contains") {
+    return {
+      type,
+      selectors: stringArrayField(input, "selectors"),
+      value: stringField(input, "value"),
+    };
+  }
+  if (type === "rendered_text_contains") {
+    return {
+      type,
+      selector: stringField(input, "selector"),
+      value: stringField(input, "value"),
+      excludeSelectors: optionalStringArrayField(input, "excludeSelectors"),
+    };
+  }
   throw new Error(`Unsupported postcondition type: ${type}`);
+}
+
+function stringArrayField(
+  input: Record<string, unknown>,
+  field: string,
+): string[] {
+  const value = input[field];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`${field} must be an array of strings.`);
+  }
+  return value;
+}
+
+function optionalStringArrayField(
+  input: Record<string, unknown>,
+  field: string,
+): string[] | undefined {
+  const value = input[field];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`${field} must be an array of strings when provided.`);
+  }
+  return value.map((item) => item.trim()).filter(Boolean);
 }
 
 function normalizeOutput(input: unknown): ProcessOutput {
@@ -824,6 +1162,38 @@ function normalizeOutput(input: unknown): ProcessOutput {
     source,
     selector: stringField(input, "selector"),
     description: stringField(input, "description"),
+    transform: optionalOutputTransform(input, "transform"),
+  };
+}
+
+function optionalOutputTransform(
+  input: Record<string, unknown>,
+  field: string,
+): ProcessOutput["transform"] | undefined {
+  const value = input[field];
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`${field} must be an object.`);
+  const type = stringField(value, "type");
+  if (
+    type !== "raw_text" &&
+    type !== "compact_lines" &&
+    type !== "notification_rows"
+  ) {
+    throw new Error(`Unsupported output transform: ${type}`);
+  }
+  const limitValue = value.limit;
+  if (
+    limitValue !== undefined &&
+    (typeof limitValue !== "number" || limitValue < 1)
+  ) {
+    throw new Error(`${field}.limit must be a positive number.`);
+  }
+  const limit = typeof limitValue === "number" ? limitValue : undefined;
+  return {
+    type,
+    ...(limit === undefined ? {} : { limit }),
+    includePatterns: optionalStringArrayField(value, "includePatterns"),
+    excludePatterns: optionalStringArrayField(value, "excludePatterns"),
   };
 }
 

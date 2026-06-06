@@ -12,6 +12,7 @@ import type {
 import { ensureDir, writeJsonFile } from "./fs-json.js";
 import { classifySelector } from "./playwright-selector.js";
 import { taskSegmentEvidenceDir } from "./paths.js";
+import { probeWriteGrounding } from "./write-grounding.js";
 
 export interface PlaywrightCliEvidenceInput {
   domain: Domain;
@@ -25,6 +26,9 @@ export interface PlaywrightCliEvidenceInput {
   exitCode: number;
   startedAt: string;
   urlBefore?: string;
+  page?: { url(): string };
+  preWriteGrounding?: PlaywrightCliEvidenceSummary["writeGrounding"];
+  preActionDiscovery?: PlaywrightCliEvidenceSummary["actionDiscovery"];
 }
 
 export interface PlaywrightCliEvidenceResult {
@@ -36,6 +40,7 @@ export interface PlaywrightCliEvidenceResult {
   evidenceSummaryPath?: string;
   evidenceSummary?: PlaywrightCliEvidenceSummary;
   urlAfter?: string;
+  writeGrounding?: PlaywrightCliEvidenceSummary["writeGrounding"];
 }
 
 export interface SnapshotRefEvidence {
@@ -99,13 +104,36 @@ export async function writePlaywrightCliEvidence(
   const selectorCandidates = target
     ? selectorCandidatesForSnapshotRef(target)
     : selectorCandidatesForSelector(targetSelector);
+  const grounding = input.page
+    ? await probeWriteGrounding({
+        page: input.page,
+        command: input.command,
+        args: input.args,
+        targetSelector,
+        targetName: target?.name,
+        targetRole: target?.role,
+        selectorCandidates,
+        urlBefore: input.urlBefore,
+        urlAfter: page.urlAfter,
+      })
+    : { selectorCandidates };
+  const writeGrounding =
+    grounding.summary?.promotionReady || !input.preWriteGrounding
+      ? grounding.summary
+      : input.preWriteGrounding;
+  const actionDiscovery =
+    grounding.summary?.promotionReady || !input.preActionDiscovery
+      ? grounding.actionDiscovery
+      : input.preActionDiscovery;
   const summary = createEvidenceSummary({
     input,
     page,
     refs,
     targetSelector,
     target,
-    selectorCandidates,
+    selectorCandidates: grounding.selectorCandidates,
+    writeGrounding,
+    actionDiscovery,
     snapshot,
   });
   const summaryPath = path.join(dir, "summary.json");
@@ -117,21 +145,36 @@ export async function writePlaywrightCliEvidence(
       selectorArg: targetSelector,
       targetRef,
       target,
-      selectorCandidates,
+      selectorCandidates: grounding.selectorCandidates,
+      writeGrounding,
+      actionDiscovery,
     });
     evidencePaths.target = targetPath;
   }
+  if (writeGrounding) {
+    const groundingPath = path.join(dir, "write-grounding.json");
+    await writeJsonFile(groundingPath, writeGrounding);
+    evidencePaths.writeGrounding = groundingPath;
+  }
+  if (actionDiscovery) {
+    const discoveryPath = path.join(dir, "action-discovery.json");
+    await writeJsonFile(discoveryPath, actionDiscovery);
+    evidencePaths.actionDiscovery = discoveryPath;
+  }
+  const selectedSelector =
+    writeGrounding?.promotionReady && writeGrounding.recommendedSelector
+      ? writeGrounding.recommendedSelector
+      : bestSelector(targetSelector, grounding.selectorCandidates);
 
   return {
     evidencePath: evidencePaths.snapshot || evidencePaths.stdout,
     evidencePaths,
     evidenceSummaryPath: summaryPath,
     evidenceSummary: summary,
-    selector: bestSelector(targetSelector, selectorCandidates),
-    selectorKind: classifySelector(
-      bestSelector(targetSelector, selectorCandidates),
-    ),
-    selectorCandidates,
+    selector: selectedSelector,
+    selectorKind: classifySelector(selectedSelector),
+    selectorCandidates: grounding.selectorCandidates,
+    writeGrounding,
     urlAfter: page.urlAfter,
   };
 }
@@ -153,10 +196,15 @@ function createEvidenceSummary(input: {
   targetSelector?: string;
   target?: SnapshotRefEvidence;
   selectorCandidates: SelectorDiagnosticCandidate[];
+  writeGrounding?: PlaywrightCliEvidenceSummary["writeGrounding"];
+  actionDiscovery?: PlaywrightCliEvidenceSummary["actionDiscovery"];
   snapshot?: string;
 }): PlaywrightCliEvidenceSummary {
   const controls = topControls(input.refs);
-  const warnings = evidenceWarnings(input);
+  const warnings = [
+    ...evidenceWarnings(input),
+    ...(input.writeGrounding?.warnings || []),
+  ];
   const preview = [
     input.page.urlAfter ? `url: ${input.page.urlAfter}` : undefined,
     input.page.title ? `title: ${input.page.title}` : undefined,
@@ -197,6 +245,8 @@ function createEvidenceSummary(input: {
     },
     controls,
     selectorCandidates: input.selectorCandidates,
+    writeGrounding: input.writeGrounding,
+    actionDiscovery: input.actionDiscovery,
     warnings,
     preview,
     createdAt: input.input.startedAt,

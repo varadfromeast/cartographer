@@ -37,6 +37,8 @@ const READ_COMMANDS = new Set<PlaywrightCliBaseCommand>([
 const HEURISTIC_WRITE_COMMANDS = new Set<PlaywrightCliBaseCommand>([
   "click",
   "dblclick",
+  "fill",
+  "type",
   "press",
 ]);
 
@@ -136,7 +138,7 @@ export function normalizePlaywrightCliArgs(input: {
     input.command === "press"
   ) {
     throw new Error(
-      "Playwright CLI `press` accepts one key argument, for example `press Enter`. In `cartographer shell`, use `press <selector> <key>` to record click+press.",
+      "Playwright CLI `press` accepts one key argument, for example `press Enter`. In Cartographer shell and `cg pw`, `press <selector> <key>` expands to recorded click+press.",
     );
   }
   if (spec.minArgs !== undefined && input.args.length < spec.minArgs) {
@@ -174,6 +176,10 @@ function operationKind(
     command === "fill" ||
     command === "type" ||
     command === "press" ||
+    command === "check" ||
+    command === "uncheck" ||
+    command === "select" ||
+    command === "upload" ||
     command === "eval" ||
     command === "screenshot"
   ) {

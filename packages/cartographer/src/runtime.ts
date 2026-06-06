@@ -1,5 +1,5 @@
-import type { Action } from "@browserbasehq/stagehand";
 import type {
+  Action,
   BrowserSession,
   BrowserSessionFactory,
   CartographerLogger,
@@ -23,6 +23,7 @@ import type {
   StepValidator,
   ValidationCheck,
   ValidationResult,
+  VisualReviewArtifact,
 } from "./contracts.js";
 import { appendJsonLine } from "./fs-json.js";
 import { sha256 } from "./hash.js";
@@ -31,6 +32,9 @@ import { auditPath, cartographerHome } from "./paths.js";
 import { shapeUrl } from "./state-identity.js";
 import { waitForLoginIfNeeded } from "./login-wait.js";
 import { getSiteConfig, type SiteConfig } from "./site-config.js";
+import { createPendingVisualReview } from "./visual-review.js";
+
+const REPLAY_ACTION_TIMEOUT_MS = 20_000;
 
 export class ProcessTapeRuntime implements CartographerRuntime {
   constructor(
@@ -40,7 +44,9 @@ export class ProcessTapeRuntime implements CartographerRuntime {
     private readonly actionCache: StateActionCache,
     private readonly replayValidator: ReplayValidator = new DefaultReplayValidator(),
     private readonly logger: CartographerLogger = new ConsoleCartographerLogger(),
-    private readonly siteConfigFor: (domain: RunProcessInput["domain"]) => SiteConfig = getSiteConfig,
+    private readonly siteConfigFor: (
+      domain: RunProcessInput["domain"],
+    ) => SiteConfig = getSiteConfig,
   ) {}
 
   async runProcess(input: RunProcessInput): Promise<RunProcessResult> {
@@ -118,7 +124,7 @@ export class ProcessTapeRuntime implements CartographerRuntime {
     this.logger.log("info", "browser.launch", { domain: input.domain });
     const session = await this.sessionFactory.launch(input.domain, {
       browser: "local",
-      cacheDir: `${cartographerHome()}/stagehand-cache`,
+      cacheDir: `${cartographerHome()}/browser-cache`,
       headless: false,
       viewport: { width: 1288, height: 900 },
       taskId: input.taskId,
@@ -139,12 +145,25 @@ export class ProcessTapeRuntime implements CartographerRuntime {
       passed: true,
       checks: [],
     };
+    let visualReview: VisualReviewArtifact | undefined;
     try {
       if (input.taskId) {
+        const currentUrl = await session.currentUrl();
         this.logger.log("info", "runtime.reuse_task_browser", {
           taskId: input.taskId,
-          currentUrl: await session.currentUrl(),
+          currentUrl,
         });
+        if (isUninitializedBrowserUrl(currentUrl)) {
+          this.logger.log("info", "runtime.goto_entry_from_blank_task_page", {
+            taskId: input.taskId,
+            url: process.entry.url,
+          });
+          await session.goto(process.entry.url);
+          await waitForLoginIfNeeded(
+            session,
+            "Instagram login screen detected",
+          );
+        }
       } else {
         this.logger.log("info", "runtime.goto_entry", {
           url: process.entry.url,
@@ -232,13 +251,18 @@ export class ProcessTapeRuntime implements CartographerRuntime {
           beforeStateId: step.before.id,
           atomId: step.atomId,
         });
-        const actions = cached?.actions.length ? cached.actions : step.actions;
+        const actionCacheSafe = !step.actions.some(actionHasRuntimePlaceholder);
+        const actions =
+          actionCacheSafe && cached?.actions.length
+            ? cached.actions
+            : step.actions;
         this.logger.log(
-          cached?.actions.length ? "info" : "debug",
+          actionCacheSafe && cached?.actions.length ? "info" : "debug",
           "runtime.step.cache",
           {
             stepName: step.name,
-            cacheHit: Boolean(cached?.actions.length),
+            cacheHit: Boolean(actionCacheSafe && cached?.actions.length),
+            cacheBypassed: !actionCacheSafe && Boolean(cached?.actions.length),
             actionCount: actions.length,
           },
         );
@@ -285,12 +309,15 @@ export class ProcessTapeRuntime implements CartographerRuntime {
         );
         const validation = await this.replayValidator.validate(
           session,
-          step.validators,
+          bindValidators(step.validators, input.args),
         );
         const expectedFingerprint = comparableFingerprint(step.after);
         const observedFingerprint = comparableFingerprint(after);
+        const fingerprintDrift =
+          expectedFingerprint.hash !== observedFingerprint.hash;
         if (
-          expectedFingerprint.hash !== observedFingerprint.hash ||
+          (fingerprintDrift &&
+            !shouldSuppressFingerprintDrift(step, validation.passed)) ||
           !validation.passed
         ) {
           const diff = this.identity.diff(
@@ -373,8 +400,31 @@ export class ProcessTapeRuntime implements CartographerRuntime {
               name: output.name,
               selector: output.selector,
             });
-            outputs[output.name] = await session.readText(output.selector);
+            outputs[output.name] = transformOutputText(
+              await session.readText(output.selector),
+              output.transform,
+            );
           }
+        }
+
+        if (process.writesToPlatform) {
+          const screenshotPath = await session.screenshot(
+            `visual-review-${process.name}`,
+          );
+          visualReview = await createPendingVisualReview({
+            domain: input.domain,
+            processName: process.name,
+            taskId: input.taskId,
+            screenshotPath,
+            url: await session.currentUrl(),
+            postconditions: process.postconditions,
+            args: input.args,
+          });
+          this.logger.log("info", "runtime.visual_review.created", {
+            processName: process.name,
+            visualReviewId: visualReview.id,
+            screenshotPath,
+          });
         }
       }
     } finally {
@@ -436,6 +486,7 @@ export class ProcessTapeRuntime implements CartographerRuntime {
       preconditions,
       postconditions,
       drift,
+      visualReview,
       failure,
       message: success
         ? drift.detected
@@ -444,6 +495,94 @@ export class ProcessTapeRuntime implements CartographerRuntime {
         : failure?.reason || "Replay failed.",
     };
   }
+}
+
+function isUninitializedBrowserUrl(url: string): boolean {
+  return url === "about:blank" || url === "";
+}
+
+function transformOutputText(
+  text: string,
+  transform: ProcessTape["outputs"][number]["transform"] | undefined,
+): string {
+  if (!transform || transform.type === "raw_text") return text;
+  if (transform.type === "notification_rows") {
+    return notificationRows(text, transform.limit || 20).join("\n");
+  }
+  const includePatterns = (transform.includePatterns || []).map(
+    (pattern) => new RegExp(pattern, "i"),
+  );
+  const excludePatterns = (transform.excludePatterns || []).map(
+    (pattern) => new RegExp(pattern, "i"),
+  );
+  const seen = new Set<string>();
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((line) =>
+      includePatterns.length
+        ? includePatterns.some((pattern) => pattern.test(line))
+        : true,
+    )
+    .filter((line) => !excludePatterns.some((pattern) => pattern.test(line)))
+    .filter((line) => {
+      const key = line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  return lines.slice(0, transform.limit || lines.length).join("\n");
+}
+
+function notificationRows(text: string, limit: number): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((line) => !isNotificationChromeLine(line));
+  const rows: string[] = [];
+  for (let index = 0; index < lines.length && rows.length < limit; index += 1) {
+    const line = lines[index];
+    if (isNotificationActivityLine(line)) {
+      const actor = /^Reminder:/i.test(line)
+        ? ""
+        : nearestNotificationActor(lines, index);
+      rows.push(actor ? `${actor} ${line}` : line);
+    }
+  }
+  return [...new Set(rows)];
+}
+
+function nearestNotificationActor(
+  lines: string[],
+  activityIndex: number,
+): string {
+  for (
+    let index = activityIndex - 1;
+    index >= Math.max(0, activityIndex - 4);
+    index -= 1
+  ) {
+    const candidate = lines[index];
+    if (!candidate || isNotificationChromeLine(candidate)) continue;
+    if (isNotificationActivityLine(candidate)) continue;
+    if (/^(Following|Follow|Follow Back|Requested|Message)$/i.test(candidate))
+      continue;
+    return candidate;
+  }
+  return "";
+}
+
+function isNotificationActivityLine(line: string): boolean {
+  return /started following you|liked your comment|liked your post|mentioned you|requested to follow|followed you|commented|shared a post|tagged you|accepted your follow request|review instagram/i.test(
+    line,
+  );
+}
+
+function isNotificationChromeLine(line: string): boolean {
+  return /^(Notifications|All|People you follow|Comments|Follows|Tags and mentions|Verified|This week|This month|Earlier|Home|Search|Explore|Reels|Messages|Create|Profile|More)$/i.test(
+    line,
+  );
 }
 
 export class DefaultReplayValidator implements ReplayValidator {
@@ -503,6 +642,59 @@ export class DefaultReplayValidator implements ReplayValidator {
             `text_contains missing ${validator.value} at ${validator.selector}`,
           );
         }
+      } else if (validator.type === "scoped_text_contains") {
+        const observations: string[] = [];
+        let passed = false;
+        for (const selector of validator.selectors) {
+          let text = "";
+          try {
+            text = await session.readText(selector);
+          } catch (error) {
+            text = error instanceof Error ? error.message : String(error);
+          }
+          observations.push(`${selector}: ${text.slice(0, 240)}`);
+          if (text.includes(validator.value)) passed = true;
+        }
+        checks.push({
+          type: validator.type,
+          passed,
+          expected: validator.value,
+          observed: observations.join("\n").slice(0, 500),
+          selector: validator.selectors.join(", "),
+        });
+        if (!passed) {
+          failures.push(
+            `scoped_text_contains missing ${validator.value} at ${validator.selectors.join(", ")}`,
+          );
+        }
+      } else if (validator.type === "rendered_text_contains") {
+        let text = "";
+        try {
+          text = await session.readTextExcluding(
+            validator.selector,
+            validator.excludeSelectors || [
+              "[contenteditable='true']",
+              "textarea",
+              "input",
+              "[role='textbox']",
+            ],
+          );
+        } catch (error) {
+          text = error instanceof Error ? error.message : String(error);
+        }
+        const passed = text.includes(validator.value);
+        checks.push({
+          type: validator.type,
+          passed,
+          expected: validator.value,
+          observed: text.slice(0, 500),
+          selector: validator.selector,
+        });
+        if (!passed) {
+          failures.push(
+            `rendered_text_contains missing ${validator.value} at ${validator.selector}`,
+          );
+        }
       } else if (validator.type === "selector_exists") {
         const exists = await session.exists(validator.selector);
         checks.push({
@@ -518,6 +710,23 @@ export class DefaultReplayValidator implements ReplayValidator {
     }
     return { passed: failures.length === 0, failures, checks };
   }
+}
+
+function shouldSuppressFingerprintDrift(
+  step: ProcessTape["steps"][number],
+  validationPassed: boolean,
+): boolean {
+  return Boolean(
+    validationPassed &&
+      step.type === "navigate" &&
+      step.validators?.length &&
+      step.actions.every(
+        (action) =>
+          action.method === "goto" &&
+          (action.selector.includes("%") ||
+            action.arguments?.some((arg) => arg.includes("%"))),
+      ),
+  );
 }
 
 function failureResult(
@@ -589,6 +798,13 @@ function bindActionArgs(action: Action, args?: RuntimeArgs): Action {
   };
 }
 
+function actionHasRuntimePlaceholder(action: Action): boolean {
+  return (
+    /%[a-zA-Z][a-zA-Z0-9_]*%/.test(action.selector) ||
+    (action.arguments || []).some((arg) => /%[a-zA-Z][a-zA-Z0-9_]*%/.test(arg))
+  );
+}
+
 async function executeActionWithSelectorFallbacks(input: {
   session: BrowserSession;
   action: Action;
@@ -619,25 +835,45 @@ async function executeActionWithSelectorFallbacks(input: {
       const action = { ...input.action, selector };
       try {
         if (input.stepType === "navigate") {
-          await input.session.goto(action.selector);
+          await withTimeout(
+            input.session.goto(action.selector),
+            REPLAY_ACTION_TIMEOUT_MS,
+            `Timed out navigating to ${action.selector}`,
+          );
           return { success: true, message: "navigation succeeded", selector };
         }
         // Phase 4: Explicit scrolling and visibility guarantees
-        if (action.method === "click" || action.method === "fill") {
-          await input.session.scrollIntoView(selector);
-          const isVisible = await input.session.isVisible(selector);
+        if (requiresVisibleEnabledElement(action.method)) {
+          await withTimeout(
+            input.session.scrollIntoView(selector),
+            REPLAY_ACTION_TIMEOUT_MS,
+            `Timed out scrolling ${selector} into view`,
+          );
+          const isVisible = await withTimeout(
+            input.session.isVisible(selector),
+            REPLAY_ACTION_TIMEOUT_MS,
+            `Timed out checking visibility for ${selector}`,
+          );
           if (!isVisible) {
             lastMessage = `Element obscured or not visible: ${selector}`;
             continue;
           }
-          const isEnabled = await input.session.isEnabled(selector);
+          const isEnabled = await withTimeout(
+            input.session.isEnabled(selector),
+            REPLAY_ACTION_TIMEOUT_MS,
+            `Timed out checking enabled state for ${selector}`,
+          );
           if (!isEnabled) {
             lastMessage = `Element is disabled: ${selector}`;
             continue;
           }
         }
 
-        const outcome = await input.session.actRaw(action);
+        const outcome = await withTimeout(
+          input.session.actRaw(action),
+          REPLAY_ACTION_TIMEOUT_MS,
+          `Timed out running ${action.method || "action"} on ${selector}`,
+        );
         if (outcome.success) {
           if (selector !== input.action.selector) {
             input.logger.log("info", "runtime.action.selector_fallback_hit", {
@@ -672,12 +908,20 @@ async function executeActionWithSelectorFallbacks(input: {
         dismissSelector: interrupt.dismissSelector,
       });
       try {
-        await input.session.actRaw({
-          method: "click",
-          selector: interrupt.dismissSelector,
-          description: `Dismiss interrupt: ${interrupt.name}`,
-        });
-        await input.session.waitForSettle();
+        await withTimeout(
+          input.session.actRaw({
+            method: "click",
+            selector: interrupt.dismissSelector,
+            description: `Dismiss interrupt: ${interrupt.name}`,
+          }),
+          REPLAY_ACTION_TIMEOUT_MS,
+          `Timed out dismissing interrupt ${interrupt.name}`,
+        );
+        await withTimeout(
+          input.session.waitForSettle(),
+          REPLAY_ACTION_TIMEOUT_MS,
+          `Timed out settling after interrupt ${interrupt.name}`,
+        );
       } catch (error) {
         input.logger.log("warn", "runtime.interrupt_dismiss_failed", {
           name: interrupt.name,
@@ -713,6 +957,39 @@ async function executeActionWithSelectorFallbacks(input: {
   );
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  milliseconds: number,
+  message: string,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function requiresVisibleEnabledElement(method?: string): boolean {
+  return [
+    "click",
+    "dblclick",
+    "hover",
+    "fill",
+    "type",
+    "press",
+    "check",
+    "uncheck",
+    "select",
+    "upload",
+  ].includes(method || "");
+}
+
 function bindValidators(
   validators?: StepValidator[],
   args?: RuntimeArgs,
@@ -726,6 +1003,15 @@ function bindValidators(
       return {
         ...validator,
         selector: replacePlaceholders(validator.selector, replacements),
+      };
+    }
+    if (validator.type === "scoped_text_contains") {
+      return {
+        ...validator,
+        selectors: validator.selectors.map((selector) =>
+          replacePlaceholders(selector, replacements),
+        ),
+        value: replacePlaceholders(validator.value, replacements),
       };
     }
     return {

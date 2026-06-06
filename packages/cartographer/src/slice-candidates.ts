@@ -75,6 +75,7 @@ export function candidateSlices(tape: FallbackTape): CandidateOperationSlice[] {
       operation.urlAfter?.includes("/direct/t/") &&
       quotedSelectorValue(operation.selector) &&
       !isGenericComposeTransition(operation.selector) &&
+      !hasPriorInboxSearchFill(operations, index) &&
       !operation.evidenceSummary?.warnings.includes(
         "target_name_contains_transient_text",
       )
@@ -111,6 +112,45 @@ export function candidateSlices(tape: FallbackTape): CandidateOperationSlice[] {
   }
 
   for (let index = 0; index < operations.length - 1; index += 1) {
+    const searchAndOpenThread = inboxSearchThenThreadOpen(operations, index);
+    if (searchAndOpenThread) {
+      add(
+        "state_transition",
+        searchAndOpenThread.operationIndexes,
+        "inbox search followed by matching direct-message thread result click",
+        {
+          suggestedCommandName: "open_thread_by_name",
+          suggestedDescription:
+            "Search the Instagram inbox and open a direct-message thread by visible thread name",
+          suggestedArgs: [
+            {
+              name: "threadName",
+              required: true,
+              description: "visible thread name or handle in the inbox",
+            },
+          ],
+          suggestedValueBindings: [
+            {
+              operationIndex: searchAndOpenThread.fillIndex,
+              argName: "threadName",
+              target: "argument",
+            },
+            {
+              operationIndex: searchAndOpenThread.clickIndex,
+              argName: "threadName",
+              target: "selector",
+            },
+          ],
+          suggestedPostconditions: [
+            { type: "url_contains", value: "/direct/t/" },
+          ],
+          suggestedStateScope: inboxScope(),
+          riskFlags: searchAndOpenThread.weak
+            ? ["weak_search_selector", "rerecord_recommended"]
+            : [],
+        },
+      );
+    }
     if (
       isStateChanging(operations[index]) &&
       operations[index + 1].kind === "text"
@@ -136,32 +176,32 @@ export function candidateSlices(tape: FallbackTape): CandidateOperationSlice[] {
   for (let index = 0; index < operations.length; index += 1) {
     const fill = operations[index];
     if (fill.kind !== "fill") continue;
-    const clickIndex = operations.findIndex(
+    const submitIndex = operations.findIndex(
       (operation, candidateIndex) =>
         candidateIndex > index &&
         candidateIndex <= index + 3 &&
-        operation.kind === "click",
+        isSubmitOperation(operation),
     );
-    if (clickIndex < 0) continue;
+    if (submitIndex < 0) continue;
     const textIndex = operations.findIndex(
       (operation, candidateIndex) =>
-        candidateIndex > clickIndex &&
-        candidateIndex <= clickIndex + 2 &&
+        candidateIndex > submitIndex &&
+        candidateIndex <= submitIndex + 2 &&
         operation.kind === "text",
     );
     if (textIndex < 0) continue;
     add(
       "write_and_verify",
-      [index, clickIndex, textIndex],
+      [index, submitIndex, textIndex],
       "fill followed by nearby submit/click and text evidence",
       {
         suggestedCommandName: commandNameFromWrite(
           fill,
-          operations[clickIndex],
+          operations[submitIndex],
         ),
         suggestedDescription: descriptionFromWrite(
           fill,
-          operations[clickIndex],
+          operations[submitIndex],
         ),
         suggestedArgs: argsForFill(fill),
         suggestedPostconditions: textPostconditions(
@@ -169,7 +209,7 @@ export function candidateSlices(tape: FallbackTape): CandidateOperationSlice[] {
           operations[textIndex],
         ),
         suggestedStateScope: dmThreadScope(),
-        riskFlags: riskFlagsForWrite(fill, operations[clickIndex]),
+        riskFlags: riskFlagsForWrite(fill, operations[submitIndex]),
       },
     );
   }
@@ -225,15 +265,102 @@ function dmThreadScope(): CommandStateScope {
 }
 
 function isExecutable(operation: FallbackOperation): boolean {
-  return (
-    operation.kind === "goto" ||
-    operation.kind === "click" ||
-    operation.kind === "fill"
-  );
+  return executableOperationKinds.has(operation.kind);
 }
+
+const executableOperationKinds = new Set<FallbackOperation["kind"]>([
+  "goto",
+  "click",
+  "dblclick",
+  "hover",
+  "fill",
+  "type",
+  "press",
+  "check",
+  "uncheck",
+  "select",
+  "upload",
+]);
 
 function isStateChanging(operation: FallbackOperation): boolean {
   return operation.kind === "goto" || operation.kind === "click";
+}
+
+function inboxSearchThenThreadOpen(
+  operations: FallbackOperation[],
+  index: number,
+):
+  | {
+      fillIndex: number;
+      clickIndex: number;
+      operationIndexes: number[];
+      weak: boolean;
+    }
+  | undefined {
+  const fill = operations[index];
+  if (fill.kind !== "fill" || !fill.urlBefore?.includes("/direct/inbox")) {
+    return undefined;
+  }
+  const selectorSource =
+    `${fill.selector || ""} ${fill.instruction}`.toLowerCase();
+  if (!/\bsearch\b/.test(selectorSource)) return undefined;
+  const clickIndex = operations.findIndex(
+    (operation, candidateIndex) =>
+      candidateIndex > index &&
+      candidateIndex <= index + 4 &&
+      operation.kind === "click" &&
+      operation.urlBefore?.includes("/direct/inbox") &&
+      operation.urlAfter?.includes("/direct/t/"),
+  );
+  if (clickIndex < 0) return undefined;
+  const click = operations[clickIndex];
+  return {
+    fillIndex: index,
+    clickIndex,
+    operationIndexes: [index, clickIndex],
+    weak:
+      hasWeakSelector(fill) ||
+      hasWeakSelector(click) ||
+      fill.writeGrounding?.promotionReady === false,
+  };
+}
+
+function hasPriorInboxSearchFill(
+  operations: FallbackOperation[],
+  clickIndex: number,
+): boolean {
+  const click = operations[clickIndex];
+  if (
+    click.kind !== "click" ||
+    !click.urlBefore?.includes("/direct/inbox") ||
+    !click.urlAfter?.includes("/direct/t/")
+  ) {
+    return false;
+  }
+  return operations.some(
+    (operation, index) =>
+      index < clickIndex &&
+      index >= clickIndex - 4 &&
+      operation.kind === "fill" &&
+      operation.urlBefore?.includes("/direct/inbox") &&
+      /\bsearch\b/.test(
+        `${operation.selector || ""} ${operation.instruction}`.toLowerCase(),
+      ),
+  );
+}
+
+function hasWeakSelector(operation: FallbackOperation): boolean {
+  const selectedCandidate = operation.selectorCandidates?.find(
+    (candidate) => candidate.selector === operation.selector,
+  );
+  return Boolean(
+    operation.selector?.match(/^(?:aria-ref=)?[a-z]?\d+$/i) ||
+      selectedCandidate?.stability === "weak" ||
+      operation.evidenceSummary?.warnings?.some((warning) =>
+        /raw_snapshot_ref|weak|no_durable/.test(warning),
+      ) ||
+      operation.writeGrounding?.promotionReady === false,
+  );
 }
 
 function navigationSuggestion(
@@ -327,21 +454,23 @@ function isGenericComposeTransition(selector?: string): boolean {
 
 function commandNameFromWrite(
   fillOperation: FallbackOperation,
-  clickOperation: FallbackOperation,
+  submitOperation: FallbackOperation,
 ): string | undefined {
   const source =
-    `${fillOperation.selector || ""} ${clickOperation.selector || ""} ${clickOperation.instruction}`.toLowerCase();
-  if (source.includes("send")) return "send_message_in_current_thread";
+    `${fillOperation.selector || ""} ${submitOperation.selector || ""} ${submitOperation.instruction}`.toLowerCase();
+  if (source.includes("send") || isEnterPress(submitOperation)) {
+    return "send_message_current_thread";
+  }
   return undefined;
 }
 
 function descriptionFromWrite(
   fillOperation: FallbackOperation,
-  clickOperation: FallbackOperation,
+  submitOperation: FallbackOperation,
 ): string | undefined {
   const source =
-    `${fillOperation.selector || ""} ${clickOperation.selector || ""} ${clickOperation.instruction}`.toLowerCase();
-  if (source.includes("send")) {
+    `${fillOperation.selector || ""} ${submitOperation.selector || ""} ${submitOperation.instruction}`.toLowerCase();
+  if (source.includes("send") || isEnterPress(submitOperation)) {
     return "Send a message in the currently open Instagram direct-message conversation";
   }
   return undefined;
@@ -349,13 +478,40 @@ function descriptionFromWrite(
 
 function riskFlagsForWrite(
   fillOperation: FallbackOperation,
-  clickOperation: FallbackOperation,
+  submitOperation: FallbackOperation,
 ): string[] {
   const flags = ["writes_to_platform"];
-  const source = `${fillOperation.urlBefore || ""} ${clickOperation.urlBefore || ""}`;
+  const source = `${fillOperation.urlBefore || ""} ${submitOperation.urlBefore || ""}`;
   if (source.includes("/direct/t/"))
     flags.push("requires_current_thread_context");
+  if (
+    fillOperation.writeGrounding?.promotionReady === false ||
+    submitOperation.writeGrounding?.promotionReady === false ||
+    fillOperation.selector?.match(/^(?:aria-ref=)?[a-z]?\d+$/i) ||
+    submitOperation.selector?.match(/^(?:aria-ref=)?[a-z]?\d+$/i)
+  ) {
+    flags.push("weak_write_selectors", "rerecord_recommended");
+  }
   return flags;
+}
+
+function isSubmitOperation(operation: FallbackOperation): boolean {
+  if (operation.kind === "press") return isEnterPress(operation);
+  if (operation.kind === "click" || operation.kind === "dblclick") {
+    const source =
+      `${operation.selector || ""} ${operation.instruction || ""}`.toLowerCase();
+    return /\b(send|submit|post|publish|save|confirm)\b/.test(source);
+  }
+  return false;
+}
+
+function isEnterPress(operation: FallbackOperation): boolean {
+  return (
+    operation.kind === "press" &&
+    (operation.commandArgs?.[0] || operation.selector || "")
+      .trim()
+      .toLowerCase() === "enter"
+  );
 }
 
 function argsForFill(
@@ -373,6 +529,22 @@ function textPostconditions(
   textOperation: FallbackOperation,
 ): Postcondition[] | undefined {
   if (!fillOperation.valuePlaceholder) return undefined;
+  if (fillOperation.urlAfter?.includes("/direct/t/")) {
+    return [
+      { type: "url_contains", value: "/direct/t/" },
+      {
+        type: "rendered_text_contains",
+        selector: "main",
+        value: fillOperation.valuePlaceholder,
+        excludeSelectors: [
+          "[contenteditable='true']",
+          "textarea",
+          "input",
+          "[role='textbox']",
+        ],
+      },
+    ];
+  }
   return [
     {
       type: "text_contains",

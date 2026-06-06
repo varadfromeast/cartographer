@@ -1,3 +1,51 @@
+## Cartographer
+
+Cartographer is a local-first deterministic site graph for agents. It captures browser
+evidence, compiles website surfaces and actions into a graph, and exposes deterministic
+CLI commands for graph search, safe traversal, action inspection, and browser execution.
+
+The current working MVP imports an existing Y Combinator exploration run into SQLite,
+indexes page and action text with FTS5, and finds canonical safe navigation paths.
+
+### YC Graph MVP
+
+Build Cartographer from the monorepo:
+
+```bash
+pnpm install
+pnpm --filter @cartographer/core build
+```
+
+Import an existing YC exploration run:
+
+```bash
+node packages/cartographer/dist/cli.js graph import ycombinator.com <exploration-run>
+```
+
+Search the imported graph and print a safe path:
+
+```bash
+node packages/cartographer/dist/cli.js graph search ycombinator.com "security startups"
+node packages/cartographer/dist/cli.js graph path ycombinator.com yc_home <surface-id>
+node packages/cartographer/dist/cli.js graph actions ycombinator.com <surface-id>
+node packages/cartographer/dist/cli.js graph summary ycombinator.com
+```
+
+The durable database is stored at:
+
+```text
+~/.cartographer/sites/ycombinator.com/site-graph.db
+```
+
+The SQLite graph keeps compact searchable/traversal state while screenshots, HTML,
+accessibility trees, markdown, and other heavy evidence remain on disk.
+
+See [architecture.md](architecture.md), [deterministic-site-graph-plan.md](deterministic-site-graph-plan.md),
+and [packages/cartographer/EXTERNAL_AGENT.md](packages/cartographer/EXTERNAL_AGENT.md) for the
+product direction and agent contract.
+
+---
+
 <div id="toc" align="center" style="margin-bottom: 0;">
   <ul style="list-style: none; margin: 0; padding: 0;">
     <a href="https://stagehand.dev">

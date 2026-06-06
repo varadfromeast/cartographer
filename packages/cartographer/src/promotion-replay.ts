@@ -9,7 +9,7 @@ import type {
   SkillRegistry,
   TaskId,
 } from "./contracts.js";
-import { StagehandBrowserSessionFactory } from "./browser-session.js";
+import { PlaywrightBrowserSessionFactory } from "./browser-session.js";
 import { JsonStateActionCache } from "./state-action-cache.js";
 import { ConsoleCartographerLogger } from "./logger.js";
 import { ProcessTapeRuntime } from "./runtime.js";
@@ -43,7 +43,7 @@ export async function replayBeforePromotion(input: {
   }
 
   const runtime = new ProcessTapeRuntime(
-    new TaskScopedBrowserSessionFactory(new StagehandBrowserSessionFactory()),
+    new TaskScopedBrowserSessionFactory(new PlaywrightBrowserSessionFactory()),
     new BasicStateIdentity(),
     new SingleProcessRegistry(input.process),
     new JsonStateActionCache(),

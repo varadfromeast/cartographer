@@ -2,8 +2,15 @@ type LocatorLike = {
   first(): LocatorLike;
   count(): Promise<number>;
   click(): Promise<void>;
+  dblclick?(): Promise<void>;
+  hover?(): Promise<void>;
   fill(value: string): Promise<void>;
   press?(key: string): Promise<void>;
+  type?(text: string): Promise<void>;
+  check?(): Promise<void>;
+  uncheck?(): Promise<void>;
+  selectOption?(values: string | string[]): Promise<unknown>;
+  setInputFiles?(files: string | string[]): Promise<void>;
   innerText(options?: { timeout?: number }): Promise<string>;
   isVisible(): Promise<boolean>;
   isEnabled(): Promise<boolean>;
@@ -21,7 +28,7 @@ type PageLike = {
   locator(selector: string): LocatorLike;
   getByRole?(
     role: string,
-    options?: { name?: string; exact?: boolean },
+    options?: { name?: string | RegExp; exact?: boolean },
   ): LocatorLike;
   getByText?(text: string, options?: { exact?: boolean }): LocatorLike;
   getByLabel?(text: string, options?: { exact?: boolean }): LocatorLike;
@@ -35,7 +42,7 @@ export type SelectorKind = "xpath" | "css" | "url" | "playwright" | "unknown";
 
 type ParsedPlaywrightSelector =
   | { kind: "ariaRef"; value: string }
-  | { kind: "role"; role: string; name?: string }
+  | { kind: "role"; role: string; name?: string | RegExp; exact?: boolean }
   | { kind: "text"; value: string }
   | { kind: "label"; value: string }
   | { kind: "placeholder"; value: string }
@@ -64,7 +71,7 @@ export function playwrightLocatorCodeForSelector(selector: string): string {
     return `page.locator(${JSON.stringify(`aria-ref=${parsed.value}`)})`;
   if (parsed.kind === "role") {
     return parsed.name
-      ? `page.getByRole(${JSON.stringify(parsed.role)}, { name: ${JSON.stringify(parsed.name)}, exact: true })`
+      ? `page.getByRole(${JSON.stringify(parsed.role)}, { name: ${selectorValueCode(parsed.name)}, exact: ${parsed.exact ?? true} })`
       : `page.getByRole(${JSON.stringify(parsed.role)})`;
   }
   if (parsed.kind === "text")
@@ -104,7 +111,7 @@ export function locatorForSelector(
       } else {
         current = (current as any).getByRole(parsed.role, {
           name: parsed.name,
-          exact: parsed.name ? true : undefined,
+          exact: parsed.name ? (parsed.exact ?? true) : undefined,
         });
       }
     } else if (parsed.kind === "text") {
@@ -167,10 +174,12 @@ function parsePlaywrightSelector(
     /^role=([a-zA-Z][a-zA-Z0-9_-]*)(?:\[name=(.+)\])?$/,
   );
   if (roleMatch) {
+    const name = roleMatch[2] ? parseSelectorValue(roleMatch[2]) : undefined;
     return {
       kind: "role",
       role: roleMatch[1],
-      name: roleMatch[2] ? parseSelectorValue(roleMatch[2]) : undefined,
+      name,
+      exact: name instanceof RegExp ? false : undefined,
     };
   }
 
@@ -186,15 +195,18 @@ function parsePlaywrightSelector(
     if (!trimmed.startsWith(prefix)) continue;
     return {
       kind,
-      value: parseSelectorValue(trimmed.slice(prefix.length)),
+      value: parseStringSelectorValue(trimmed.slice(prefix.length)),
     };
   }
 
   return null;
 }
 
-function parseSelectorValue(value: string): string {
+function parseSelectorValue(value: string): string | RegExp {
   const trimmed = value.trim();
+  if (trimmed.startsWith("/") && trimmed.endsWith("/")) {
+    return new RegExp(trimmed.slice(1, -1));
+  }
   if (
     (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
     (trimmed.startsWith("'") && trimmed.endsWith("'"))
@@ -210,4 +222,14 @@ function parseSelectorValue(value: string): string {
     }
   }
   return trimmed;
+}
+
+function parseStringSelectorValue(value: string): string {
+  const parsed = parseSelectorValue(value);
+  return parsed instanceof RegExp ? parsed.source : parsed;
+}
+
+function selectorValueCode(value: string | RegExp): string {
+  if (value instanceof RegExp) return value.toString();
+  return JSON.stringify(value);
 }

@@ -35,8 +35,26 @@ export function createFallbackPromotionSummary(
     steps,
     operations: tape.operations || [],
     evidence: evidencePreview,
+    visualReviews: visualReviewsForTape(tape),
     mechanicalHints,
   };
+}
+
+function visualReviewsForTape(
+  tape: FallbackTape,
+): FallbackPromotionSummary["visualReviews"] {
+  const byId = new Map<
+    string,
+    FallbackPromotionSummary["visualReviews"][number]
+  >();
+  for (const review of tape.visualReviews || []) byId.set(review.id, review);
+  for (const operation of tape.operations || []) {
+    if (operation.visualReview)
+      byId.set(operation.visualReview.id, operation.visualReview);
+  }
+  return [...byId.values()].sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  );
 }
 
 function finalUrl(tape: FallbackTape): string {
@@ -83,9 +101,12 @@ function createMechanicalHints(
   steps: FallbackStepSummary[],
   evidencePreview: EvidencePreview[],
 ): MechanicalPromotionHints {
-  const selectorWarnings = unique(
-    steps.flatMap((step) => step.selectorWarnings),
-  );
+  const selectorWarnings = unique([
+    ...steps.flatMap((step) => step.selectorWarnings),
+    ...(tape.operations || []).flatMap(
+      (operation) => operation.writeGrounding?.warnings || [],
+    ),
+  ]);
   const riskFlags = new Set<string>();
   if (tape.status !== "succeeded") riskFlags.add("fallback_not_succeeded");
   if (
@@ -94,9 +115,11 @@ function createMechanicalHints(
   ) {
     riskFlags.add("writes_to_platform");
   }
-  if (!steps.length && !tape.operations?.length) riskFlags.add("empty_fallback");
+  if (!steps.length && !tape.operations?.length)
+    riskFlags.add("empty_fallback");
   if (!tape.operations?.length) riskFlags.add("no_operation_log");
-  if (!steps.length && tape.operations?.length) riskFlags.add("operation_slices_only");
+  if (!steps.length && tape.operations?.length)
+    riskFlags.add("operation_slices_only");
   if (steps.length && (tape.operations?.length || 0) > steps.length)
     riskFlags.add("operation_log_has_unrecorded_context");
   if (steps.some((step) => !step.validators.length))
@@ -105,6 +128,14 @@ function createMechanicalHints(
     riskFlags.add("has_absolute_xpath");
   if (selectorWarnings.includes("body_selector"))
     riskFlags.add("has_body_selector");
+  if (
+    selectorWarnings.includes(
+      "write_target_needs_rerecord_with_durable_selector",
+    )
+  ) {
+    riskFlags.add("weak_write_selectors");
+    riskFlags.add("rerecord_recommended");
+  }
   if (evidencePreview.every((evidence) => evidence.kind !== "text"))
     riskFlags.add("no_text_evidence");
   if (!tape.args.length && usesRuntimePlaceholders(tape))

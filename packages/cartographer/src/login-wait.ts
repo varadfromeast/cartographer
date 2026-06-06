@@ -3,11 +3,21 @@ import { stdin as input, stdout as output } from "node:process";
 import type { Page } from "playwright";
 import type { BrowserSession } from "./contracts.js";
 
-const LOGIN_URL_PARTS = ["/accounts/login", "/accounts/onetap"];
+const LOGIN_URL_PARTS = [
+  "/accounts/login",
+  "/accounts/onetap",
+  "/login",
+  "/checkpoint",
+  "/uas/login",
+];
 const LOGIN_SELECTORS = [
   'input[name="username"]',
   'input[name="password"]',
+  'input[type="password"]',
+  'input[name="session_key"]',
+  'input[name="session_password"]',
   'form[action*="/accounts/login"]',
+  'form[action*="login"]',
 ];
 
 export async function waitForLoginIfNeeded(

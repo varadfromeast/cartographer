@@ -31,6 +31,11 @@ Reject if:
 - the proposed command name describes agent reasoning instead of deterministic browser/evidence collection
 - a read/evidence command could return selector-backed text but declares only a screenshot or no output
 
+Rerecord if:
+- the capability is valuable and narrow, but current evidence lacks durable selectors or rendered final-state checks
+- a write candidate relies on raw snapshot refs, generated XPath, exact dynamic accessible names, or current snapshot ordering
+- a send-message candidate proves only that text exists in the composer/input instead of a rendered message item after submit
+
 Delete only if:
 - the tape is noise or should not be retained.
 
@@ -42,11 +47,13 @@ Your job is reasoning only. Do not run promotion, rejection, deletion, browser, 
 
 Return exactly one JSON object matching PromotionBatchDecision:
 - action must be "review_batch"
-- include taskId, reasoning, confidence, and decisions[]
+- include taskId, reasoning, confidence, scorecardReview, obligationDispositions[], and decisions[]
 - each item in decisions[] is one PromotionDecision for one fallback slice or whole fallback
 - one fallback may produce multiple promote/reject decisions when it contains multiple independent reusable slices
 - evaluate candidate slices independently; noisy sibling operations do not disqualify a clean slice
-- every candidate with suggestedCommandName and suggestedPostconditions is promotion-ready: promote it or explicitly reject that slice
+- every candidate with suggestedCommandName and suggestedPostconditions is promotion-ready unless it carries rerecord/weak-selector risk: promote it, reject it, or mark it for rerecord
+- review acquisition obligations before decisions; each blocker/warning obligation must be acknowledged with a concrete disposition
+- assign agentEasyToPromote ("low", "medium", or "high") to every promote/reject/delete decision for a candidate
 
 For promote decisions:
 - promote small deterministic browser/evidence commands, not broad user goals
@@ -62,6 +69,7 @@ For promote decisions:
 - include stateScope when a command is only valid in a specific browser state, such as inbox or DM thread
 - no stateScope means globally callable; do not add scope to direct URL/global navigation commands
 - include duplicateJudgment when duplicate candidates are surfaced
+- include agentEasyToPromote based on your honest judgment after reading evidence, not just the harness rating
 
 For reject decisions:
 - reject noisy, one-off, private, transient, unsafe, or semantically broad slices
@@ -69,6 +77,14 @@ For reject decisions:
 - reject the remaining whole fallback with reviewItemId "<fallbackTapeId>:fallback" when useful slices were handled separately
 - reject when no operation slice is independently replayable
 - do not use whole-fallback risk flags as the reason to reject a clean operation slice
+- do not reject a whole fallback until all high/medium acquisition candidates and obligations are handled separately
+- if fallback evidence data appears in final written output, promote, reject, or rerecord a read/output command for that data
+- if a write action completed but selectors are weak, use obligationDispositions to choose rerecord or a write-specific rejection
+
+For rerecord decisions:
+- use action "rerecord"; this records a typed outcome and never mutates the catalog
+- include reviewItemId, operationIndexes when known, rerecordReason, rerecordInstructions, and suggestedCommandName when the target command is clear
+- use rerecord for send_message_current_thread when the write is valuable but composer/send selectors are not promotion-quality
 
 For delete decisions:
 - delete only when the fallback should not be retained.
@@ -88,6 +104,7 @@ export const PROMOTION_POLICY_HARD_RULES = [
   "runtime placeholders must have declared args",
   "output contracts must have valid names, selectors, and descriptions",
   "if duplicate candidates are surfaced, promotion requires explicit duplicateJudgment",
+  "rerecord decisions never mutate catalog or generated skill contracts",
 ];
 
 export const PROMOTION_POLICY_ADVISORY_RULES = [
@@ -100,4 +117,5 @@ export const PROMOTION_POLICY_ADVISORY_RULES = [
   "non-write commands without outputs are navigation/state commands only",
   "state-scoped commands should expose the narrow state they require; global commands should omit stateScope",
   "prefer rejecting a broad task fallback and promoting only a smaller reusable sub-operation",
+  "valuable write candidates with weak selectors should be marked for rerecord instead of promoted",
 ];

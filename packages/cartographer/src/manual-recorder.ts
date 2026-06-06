@@ -41,7 +41,10 @@ export class ProcessTapeRecorder implements ManualRecorder {
   }
 
   async observe(instruction: string): Promise<ObservedCandidate[]> {
-    this.beforeObserve = await this.identity.capture(this.session, "before-observe");
+    this.beforeObserve = await this.identity.capture(
+      this.session,
+      "before-observe",
+    );
     const observed = await this.session.observe(instruction);
     this.candidates.clear();
     for (const candidate of observed) {
@@ -55,16 +58,23 @@ export class ProcessTapeRecorder implements ManualRecorder {
     if (!candidate) {
       throw new Error(`Unknown candidate id: ${candidateId}`);
     }
-    const before = this.beforeObserve || (await this.identity.capture(this.session, "before-act"));
+    const before =
+      this.beforeObserve ||
+      (await this.identity.capture(this.session, "before-act"));
     const outcome = await this.session.act(candidate);
     const after = await this.identity.capture(this.session, "after-act");
     this.lastAction = { before, candidate, outcome, after };
     return outcome;
   }
 
-  async recordLastStep(stepName: string, options?: RecordStepOptions): Promise<TapeStep> {
+  async recordLastStep(
+    stepName: string,
+    options?: RecordStepOptions,
+  ): Promise<TapeStep> {
     if (!this.lastAction) {
-      throw new Error("No action has been executed. Run observe and act first.");
+      throw new Error(
+        "No action has been executed. Run observe and act first.",
+      );
     }
 
     const { before, candidate, outcome, after } = this.lastAction;
@@ -84,7 +94,8 @@ export class ProcessTapeRecorder implements ManualRecorder {
       after,
       atomId: candidate.atom.id,
       instruction: candidate.instruction,
-      actions: outcome.actions.length > 0 ? outcome.actions : [candidate.action],
+      actions:
+        outcome.actions.length > 0 ? outcome.actions : [candidate.action],
       status: "recorded",
       validationHash: after.fingerprint.hash,
       writesToPlatform,
@@ -128,7 +139,8 @@ export class ProcessTapeRecorder implements ManualRecorder {
       args: input.args || [],
       postconditions: selectedSteps[selectedSteps.length - 1].validators,
       writesToPlatform:
-        input.writesToPlatform ?? selectedSteps.some((step) => step.writesToPlatform),
+        input.writesToPlatform ??
+        selectedSteps.some((step) => step.writesToPlatform),
       createdAt: now,
       updatedAt: now,
     };

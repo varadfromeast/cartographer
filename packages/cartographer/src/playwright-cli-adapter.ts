@@ -12,6 +12,7 @@ import { cartographerPlaywrightCliSessionName } from "./playwright-cli-substrate
 import type { PlaywrightCliBaseCommand } from "./playwright-cli-substrate.js";
 import { connectOrStartTaskBrowser } from "./task-browser.js";
 import { writePlaywrightCliEvidence } from "./playwright-cli-evidence.js";
+import { probeWriteGrounding } from "./write-grounding.js";
 import {
   isPlaywrightCliCommand,
   normalizePlaywrightCliArgs,
@@ -140,17 +141,27 @@ async function runRecordedPlaywrightCliInSession(
 
   const startedAt = new Date().toISOString();
   const urlBefore = await currentPageUrl(input.taskBrowser.page);
+  const commandArgsForExecution = selectorCompatibleArgs(command, commandArgs);
+  const preGrounding = await probeWriteGrounding({
+    page: input.taskBrowser.page,
+    command,
+    args: commandArgsForExecution,
+    targetSelector: selectorForCommand(command, commandArgsForExecution),
+    selectorCandidates: [],
+    urlBefore,
+  });
   const result = await runPlaywrightCli([
     `-s=${input.sessionName}`,
     command,
-    ...commandArgs,
+    ...commandArgsForExecution,
   ]);
+  const normalizedResult = normalizePlaywrightCliResult(result);
   const operationId = sha256({
     domain: input.domain,
     taskId: input.taskId,
     segmentId: input.segmentId,
     command,
-    args: commandArgs,
+    args: commandArgsForExecution,
     startedAt,
   });
   const evidence = await writePlaywrightCliEvidence({
@@ -159,12 +170,15 @@ async function runRecordedPlaywrightCliInSession(
     segmentId: input.segmentId,
     operationId,
     command,
-    args: commandArgs,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    exitCode: result.exitCode,
+    args: commandArgsForExecution,
+    stdout: normalizedResult.stdout,
+    stderr: normalizedResult.stderr,
+    exitCode: normalizedResult.exitCode,
     startedAt,
     urlBefore,
+    page: input.taskBrowser.page,
+    preWriteGrounding: preGrounding.summary,
+    preActionDiscovery: preGrounding.actionDiscovery,
   });
   const operation: FallbackOperation = {
     id: operationId,
@@ -173,26 +187,28 @@ async function runRecordedPlaywrightCliInSession(
     promotionEligible: spec.promotionEligible,
     instruction: ["playwright-cli", command, ...input.args].join(" "),
     command,
-    commandArgs,
-    success: result.exitCode === 0,
+    commandArgs: commandArgsForExecution,
+    success: normalizedResult.exitCode === 0,
     failureReason:
-      result.exitCode === 0
+      normalizedResult.exitCode === 0
         ? undefined
-        : result.stderr.trim() ||
-          result.stdout.trim() ||
+        : normalizedResult.stderr.trim() ||
+          normalizedResult.stdout.trim() ||
           "playwright-cli failed",
     writesToPlatform: writesToPlatform({
       command,
-      args: input.args,
+      args: commandArgsForExecution,
       urlBefore,
-      urlAfter: evidence.urlAfter || extractPageUrl(result.stdout),
+      urlAfter: evidence.urlAfter || extractPageUrl(normalizedResult.stdout),
     }),
     urlBefore,
-    urlAfter: evidence.urlAfter || extractPageUrl(result.stdout),
+    urlAfter: evidence.urlAfter || extractPageUrl(normalizedResult.stdout),
     selector: evidence.selector || selectorForCommand(command, commandArgs),
     selectorKind: evidence.selectorKind,
     selectorCandidates: evidence.selectorCandidates,
-    evidencePath: evidence.evidencePath || extractSnapshotPath(result.stdout),
+    writeGrounding: evidence.writeGrounding,
+    evidencePath:
+      evidence.evidencePath || extractSnapshotPath(normalizedResult.stdout),
     evidencePaths: evidence.evidencePaths,
     evidenceSummaryPath: evidence.evidenceSummaryPath,
     evidenceSummary: evidence.evidenceSummary,
@@ -205,12 +221,12 @@ async function runRecordedPlaywrightCliInSession(
     operation,
   });
   return {
-    success: result.exitCode === 0,
+    success: normalizedResult.exitCode === 0,
     sessionName: input.sessionName,
     command,
-    args: commandArgs,
-    stdout: result.stdout,
-    stderr: result.stderr,
+    args: commandArgsForExecution,
+    stdout: normalizedResult.stdout,
+    stderr: normalizedResult.stderr,
     operation,
   };
 }
@@ -227,7 +243,7 @@ async function runPlaywrightCli(args: string[]): Promise<{
     process.env.CARTOGRAPHER_PLAYWRIGHT_DAEMON_DIR ||
     path.join("/private/tmp", "cartographer-playwright-daemon");
   const timeoutMs = Number(
-    process.env.CARTOGRAPHER_PLAYWRIGHT_CLI_TIMEOUT_MS || "15000",
+    process.env.CARTOGRAPHER_PLAYWRIGHT_CLI_TIMEOUT_MS || "45000",
   );
   return await new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
@@ -240,6 +256,12 @@ async function runPlaywrightCli(args: string[]): Promise<{
     });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      stderr += `\nplaywright-cli timed out after ${timeoutMs}ms`;
+      child.kill("SIGTERM");
+    }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -248,22 +270,13 @@ async function runPlaywrightCli(args: string[]): Promise<{
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      resolve({
-        exitCode: 124,
-        stdout,
-        stderr:
-          `${stderr}\nplaywright-cli timed out after ${timeoutMs}ms: ${args.join(" ")}`.trim(),
-      });
-    }, timeoutMs);
     child.on("error", (error) => {
-      clearTimeout(timer);
+      clearTimeout(timeout);
       reject(error);
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ exitCode: code || 0, stdout, stderr });
+      clearTimeout(timeout);
+      resolve({ exitCode: timedOut ? 124 : code || 0, stdout, stderr });
     });
   });
 }
@@ -276,20 +289,19 @@ function writesToPlatform(input: {
 }): boolean {
   const spec = playwrightCliCommandSpec(input.command);
   if (spec.writesToPlatform !== "heuristic") return spec.writesToPlatform;
-  if (
-    (input.command === "click" ||
-      input.command === "dblclick" ||
-      input.command === "press") &&
-    input.urlBefore &&
-    input.urlAfter &&
-    input.urlBefore !== input.urlAfter &&
-    !writeKeywordSource(input).match(
-      /\b(send|submit|post|publish|save|confirm|delete|remove)\b/,
-    )
-  ) {
-    return false;
+  const source = writeKeywordSource(input);
+  const hasWriteKeyword =
+    /\b(send|submit|post|publish|save|confirm|delete|remove|follow|unfollow|like|unlike)\b/.test(
+      source,
+    );
+  if (hasWriteKeyword) return true;
+  if (input.command === "press") {
+    return (input.args[0] || "").toLowerCase() === "enter";
   }
-  return true;
+  if (input.command === "fill" || input.command === "type") {
+    return source.includes("/direct/t/");
+  }
+  return false;
 }
 
 function writeKeywordSource(input: {
@@ -327,4 +339,62 @@ function selectorForCommand(
 ): string | undefined {
   if (command === "goto" || command === "open") return args[0];
   return selectorArgForCommand({ command, args });
+}
+
+function selectorCompatibleArgs(
+  command: PlaywrightCliBaseCommand,
+  args: string[],
+): string[] {
+  const selectorArg = selectorArgForCommand({ command, args });
+  if (!selectorArg) return args;
+  const index = playwrightCliCommandSpec(command).selectorArgIndex;
+  if (index === undefined) return args;
+  const compatible = selectorForPlaywrightCli(command, selectorArg);
+  if (compatible === selectorArg) return args;
+  const next = [...args];
+  next[index] = compatible;
+  return next;
+}
+
+function selectorForPlaywrightCli(
+  command: PlaywrightCliBaseCommand,
+  selector: string,
+): string {
+  const placeholder = selector.match(/^placeholder=(.+)$/)?.[1];
+  if (placeholder && command === "fill") {
+    return `role=textbox[name=${placeholder}]`;
+  }
+  const label = selector.match(/^label=(.+)$/)?.[1];
+  if (label && command === "fill") {
+    return `role=textbox[name=${label}]`;
+  }
+  return selector;
+}
+
+function normalizePlaywrightCliResult(result: {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}): {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+} {
+  if (result.exitCode !== 0) return result;
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (/### Error\b|^Error:|Unknown engine|TimeoutError:/m.test(output)) {
+    return {
+      ...result,
+      exitCode: 1,
+      stderr: result.stderr.trim()
+        ? result.stderr
+        : firstErrorBlock(result.stdout) || "playwright-cli reported an error",
+    };
+  }
+  return result;
+}
+
+function firstErrorBlock(stdout: string): string {
+  const match = stdout.match(/### Error\s*([\s\S]*)/);
+  return match?.[1]?.trim() || "";
 }

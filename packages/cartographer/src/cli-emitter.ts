@@ -95,7 +95,10 @@ if (rest.includes("--help") || rest.includes("-h")) {
   if (info.outputs.length) {
     console.log("");
     console.log("Outputs:");
-    for (const output of info.outputs) console.log(\`  outputs.\${output.name}  \${output.description} [\${output.selector}]\`);
+    for (const output of info.outputs) {
+      const transform = output.transform ? \` transform=\${output.transform.type}\${output.transform.limit ? \` limit=\${output.transform.limit}\` : ""}\` : "";
+      console.log(\`  outputs.\${output.name}  \${output.description} [\${output.selector}]\${transform}\`);
+    }
   }
   if (info.postconditions.length) {
     console.log("");
@@ -133,6 +136,8 @@ function toCliFlag(argName) {
 function formatPostcondition(postcondition) {
   if (postcondition.type === "selector_exists") return \`selector_exists \${postcondition.selector}\`;
   if (postcondition.type === "text_contains") return \`text_contains \${postcondition.selector} includes \${JSON.stringify(postcondition.value)}\`;
+  if (postcondition.type === "scoped_text_contains") return \`scoped_text_contains \${postcondition.selectors.join(", ")} includes \${JSON.stringify(postcondition.value)}\`;
+  if (postcondition.type === "rendered_text_contains") return \`rendered_text_contains \${postcondition.selector} includes \${JSON.stringify(postcondition.value)} excluding composer/input text\`;
   return \`\${postcondition.type} \${postcondition.value}\`;
 }
 `;

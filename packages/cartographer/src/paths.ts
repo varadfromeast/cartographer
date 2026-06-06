@@ -187,6 +187,7 @@ export function recordingDirs(domain: Domain): string[] {
     fallbackDir(domain),
     tasksDir(domain),
     evidenceDir(domain),
+    visualReviewDir(domain),
     promotionDir(domain),
   ];
 }
@@ -213,6 +214,34 @@ export function skillPath(domain: Domain): string {
 
 export function manifestPath(domain: Domain): string {
   return path.join(siteDir(domain), "manifest.json");
+}
+
+export function siteGraphJsonPath(domain: Domain): string {
+  return path.join(siteDir(domain), "site-graph.json");
+}
+
+export function siteGraphMarkdownPath(domain: Domain): string {
+  return path.join(siteDir(domain), "site-graph.md");
+}
+
+export function surfacePacketDir(domain: Domain): string {
+  return path.join(siteDir(domain), "surfaces");
+}
+
+export function surfacePacketIndexPath(domain: Domain): string {
+  return path.join(surfacePacketDir(domain), "index.json");
+}
+
+export function surfacePacketPath(domain: Domain, nodeId: string): string {
+  return path.join(surfacePacketDir(domain), `${slugifyName(nodeId)}.json`);
+}
+
+export function visualReviewDir(domain: Domain): string {
+  return path.join(siteDir(domain), "visual-reviews");
+}
+
+export function visualReviewPath(domain: Domain, id: string): string {
+  return path.join(visualReviewDir(domain), `${slugifyName(id)}.json`);
 }
 
 export function auditPath(domain: Domain): string {

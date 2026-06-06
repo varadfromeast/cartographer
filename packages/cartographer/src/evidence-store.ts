@@ -10,10 +10,15 @@ import { ensureDir } from "./fs-json.js";
 import { evidenceDir } from "./paths.js";
 
 export class FileEvidenceStore implements EvidenceStore {
-  async captureScreenshot(input: CaptureScreenshotInput): Promise<EvidenceArtifact> {
+  async captureScreenshot(
+    input: CaptureScreenshotInput,
+  ): Promise<EvidenceArtifact> {
     const dir = evidenceDir(input.domain);
     await ensureDir(dir);
-    const filePath = path.join(dir, `${timestamp()}-${safeLabel(input.label)}.png`);
+    const filePath = path.join(
+      dir,
+      `${timestamp()}-${safeLabel(input.label)}.png`,
+    );
     await fs.writeFile(filePath, await input.screenshot());
     return {
       kind: "screenshot",
@@ -26,7 +31,10 @@ export class FileEvidenceStore implements EvidenceStore {
   async captureText(input: CaptureTextInput): Promise<EvidenceArtifact> {
     const dir = evidenceDir(input.domain);
     await ensureDir(dir);
-    const filePath = path.join(dir, `${timestamp()}-${safeLabel(input.label)}.txt`);
+    const filePath = path.join(
+      dir,
+      `${timestamp()}-${safeLabel(input.label)}.txt`,
+    );
     await fs.writeFile(filePath, input.text, "utf8");
     return {
       kind: "text",
@@ -43,5 +51,7 @@ function timestamp(): string {
 }
 
 function safeLabel(label: string): string {
-  return label.replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "") || "evidence";
+  return (
+    label.replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "") || "evidence"
+  );
 }

@@ -8,8 +8,8 @@ import {
   type Locator,
   type Page,
 } from "playwright";
-import type { Action } from "@browserbasehq/stagehand";
 import type {
+  Action,
   BrowserFallbackRecorder,
   CreateFallbackTapeInput,
   Domain,
@@ -36,6 +36,7 @@ import type {
 import { ensureDir } from "./fs-json.js";
 import { actionToAtom, shapeUrl } from "./state-identity.js";
 import { browserProfileDir } from "./paths.js";
+import { cartographerBrowserExecutablePath } from "./browser-provider.js";
 import { sha256 } from "./hash.js";
 import { FileEvidenceStore } from "./evidence-store.js";
 import {
@@ -430,9 +431,7 @@ export class PlaywrightFallbackRecorder implements BrowserFallbackRecorder {
       browserProfileDir(this.domain);
     await ensureDir(profileDir);
     this.context = await chromium.launchPersistentContext(profileDir, {
-      executablePath:
-        process.env.CARTOGRAPHER_CHROME_PATH ||
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      executablePath: cartographerBrowserExecutablePath(),
       headless: false,
       viewport: { width: 1288, height: 900 },
     });
@@ -585,6 +584,132 @@ export class PlaywrightFallbackRecorder implements BrowserFallbackRecorder {
     });
   }
 
+  async check(selector: string): Promise<void> {
+    const before = await this.capture("before-check");
+    const target = await this.resolveTarget(selector, `check ${selector}`);
+    await target.locator.first().check();
+    await waitForPageLoginIfNeeded(
+      this.getPage(),
+      "Instagram login screen detected",
+    );
+    await waitForRenderedPage(this.getPage(), 1000);
+    const after = await this.capture("after-check");
+    this.lastStep = this.toLastStep({
+      before,
+      after,
+      instruction: target.description,
+      selector: target.selector,
+      method: "check",
+      type: "click",
+      arguments_: [],
+      validators: [],
+      selectorDiagnostics: target.diagnostics,
+    });
+    await this.recordOperation({
+      kind: "check",
+      instruction: target.description,
+      urlBefore: before.url,
+      urlAfter: after.url,
+      selector: target.selector,
+      selectorKind: target.selectorKind,
+    });
+  }
+
+  async uncheck(selector: string): Promise<void> {
+    const before = await this.capture("before-uncheck");
+    const target = await this.resolveTarget(selector, `uncheck ${selector}`);
+    await target.locator.first().uncheck();
+    await waitForPageLoginIfNeeded(
+      this.getPage(),
+      "Instagram login screen detected",
+    );
+    await waitForRenderedPage(this.getPage(), 1000);
+    const after = await this.capture("after-uncheck");
+    this.lastStep = this.toLastStep({
+      before,
+      after,
+      instruction: target.description,
+      selector: target.selector,
+      method: "uncheck",
+      type: "click",
+      arguments_: [],
+      validators: [],
+      selectorDiagnostics: target.diagnostics,
+    });
+    await this.recordOperation({
+      kind: "uncheck",
+      instruction: target.description,
+      urlBefore: before.url,
+      urlAfter: after.url,
+      selector: target.selector,
+      selectorKind: target.selectorKind,
+    });
+  }
+
+  async select(selector: string, values: string[]): Promise<void> {
+    const before = await this.capture("before-select");
+    const target = await this.resolveTarget(selector, `select ${selector}`);
+    await target.locator.first().selectOption(values);
+    await waitForPageLoginIfNeeded(
+      this.getPage(),
+      "Instagram login screen detected",
+    );
+    await waitForRenderedPage(this.getPage(), 1000);
+    const after = await this.capture("after-select");
+    this.lastStep = this.toLastStep({
+      before,
+      after,
+      instruction: target.description,
+      selector: target.selector,
+      method: "select",
+      type: "select",
+      arguments_: values,
+      validators: [],
+      selectorDiagnostics: target.diagnostics,
+    });
+    await this.recordOperation({
+      kind: "select",
+      instruction: target.description,
+      urlBefore: before.url,
+      urlAfter: after.url,
+      selector: target.selector,
+      selectorKind: target.selectorKind,
+      commandArgs: [selector, ...values],
+    });
+  }
+
+  async upload(selector: string, files: string[]): Promise<void> {
+    const before = await this.capture("before-upload");
+    const target = await this.resolveTarget(selector, `upload ${selector}`);
+    await target.locator.first().setInputFiles(files);
+    await waitForPageLoginIfNeeded(
+      this.getPage(),
+      "Instagram login screen detected",
+    );
+    await waitForRenderedPage(this.getPage(), 1000);
+    const after = await this.capture("after-upload");
+    this.lastStep = this.toLastStep({
+      before,
+      after,
+      instruction: target.description,
+      selector: target.selector,
+      method: "upload",
+      type: "upload",
+      arguments_: files,
+      validators: [],
+      selectorDiagnostics: target.diagnostics,
+    });
+    await this.recordOperation({
+      kind: "upload",
+      instruction: target.description,
+      urlBefore: before.url,
+      urlAfter: after.url,
+      selector: target.selector,
+      selectorKind: target.selectorKind,
+      commandArgs: [selector, ...files],
+    });
+  }
+
   async fill(selector: string, value: string, argName?: string): Promise<void> {
     const before = await this.capture("before-fill");
     const target = await this.resolveTarget(selector, `fill ${selector}`);
@@ -633,6 +758,7 @@ export class PlaywrightFallbackRecorder implements BrowserFallbackRecorder {
       urlBefore: before.url,
       urlAfter: after.url,
       valuePlaceholder: placeholderForValue(value),
+      commandArgs: [value],
       writesToPlatform: options.submit,
     });
   }
@@ -653,6 +779,7 @@ export class PlaywrightFallbackRecorder implements BrowserFallbackRecorder {
       urlAfter: after.url,
       selector: key,
       selectorKind: "playwright",
+      commandArgs: [key],
       writesToPlatform: isWriteKey(key),
     });
   }
@@ -1230,6 +1357,36 @@ function createFallbackCommandTable(input: {
     await recorder.hover(selector);
     console.log(`ok hover ${selector}`);
   });
+  add("check", async (rest) => {
+    const selector = rest.join(" ");
+    if (!selector) return printUsage("check <ref-or-selector>");
+    await recorder.check(selector);
+    console.log(`ok check ${selector}`);
+  });
+  add("uncheck", async (rest) => {
+    const selector = rest.join(" ");
+    if (!selector) return printUsage("uncheck <ref-or-selector>");
+    await recorder.uncheck(selector);
+    console.log(`ok uncheck ${selector}`);
+  });
+  add("select", async (rest) => {
+    const selector = rest[0];
+    const values = rest.slice(1);
+    if (!selector || !values.length) {
+      return printUsage("select <ref-or-selector> <value> [value...]");
+    }
+    await recorder.select(selector, values);
+    console.log(`ok select ${selector}`);
+  });
+  add("upload", async (rest) => {
+    const selector = rest[0];
+    const files = rest.slice(1);
+    if (!selector || !files.length) {
+      return printUsage("upload <ref-or-selector> <file> [file...]");
+    }
+    await recorder.upload(selector, files);
+    console.log(`ok upload ${selector}`);
+  });
   add("fill", async (rest) => {
     const selector = rest[0];
     const value = rest.slice(1).join(" ");
@@ -1510,6 +1667,10 @@ function printPlaywrightFallbackHelp(): void {
   click <ref-or-selector>
   dblclick <ref-or-selector>
   hover <ref-or-selector>
+  check <ref-or-selector>
+  uncheck <ref-or-selector>
+  select <ref-or-selector> <value> [value...]
+  upload <ref-or-selector> <file> [file...]
   fill <ref-or-selector> <value>
   fill-arg <ref-or-selector> <arg-name> <value>
   type <text> [--submit]

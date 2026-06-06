@@ -59,7 +59,10 @@ export class PreloadedSkillRegistry implements SkillRegistry {
     return skillset;
   }
 
-  async getProcess(domain: Domain, name: ProcessName): Promise<ProcessTape | null> {
+  async getProcess(
+    domain: Domain,
+    name: ProcessName,
+  ): Promise<ProcessTape | null> {
     const skillset = await this.preload(domain);
     this.logger.log("debug", "registry.get_process", {
       domain,

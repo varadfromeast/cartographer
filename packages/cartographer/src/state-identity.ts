@@ -1,5 +1,5 @@
-import type { Action } from "@browserbasehq/stagehand";
 import type {
+  Action,
   Atom,
   BrowserSession,
   ObservedCandidate,
@@ -42,7 +42,11 @@ export class BasicStateIdentity implements StateIdentity {
     };
   }
 
-  fingerprint(atoms: Atom[], url: string, kind: StateKind = "unknown"): StateFingerprint {
+  fingerprint(
+    atoms: Atom[],
+    url: string,
+    kind: StateKind = "unknown",
+  ): StateFingerprint {
     const atomIds = atoms.map((atom) => atom.id).sort();
     const urlShape = shapeUrl(url);
     const hash = sha256({ atomIds, kind, urlShape });
@@ -78,8 +82,14 @@ export class BasicStateIdentity implements StateIdentity {
   }
 }
 
-export function actionToAtom(action: Action, instruction: string, domain = "instagram.com"): Atom {
-  const description = normalizeText(action.description || instruction || "action");
+export function actionToAtom(
+  action: Action,
+  instruction: string,
+  domain = "instagram.com",
+): Atom {
+  const description = normalizeText(
+    action.description || instruction || "action",
+  );
   const accessibleName = extractAccessibleName(action, description);
   const method = action.method?.trim() || "unknown";
   const xpathShape = shapeSelector(action.selector);
@@ -102,13 +112,15 @@ export function actionToAtom(action: Action, instruction: string, domain = "inst
 }
 
 export function shapeSelector(selector: string): string {
-  return selector
-    .replace(/\[\d+\]/g, "[]")
-    // Mask volatile attribute values (like dynamic IDs or classes)
-    .replace(/(=['"])[^'"]+(\d+)[^'"]*(['"])/g, "$1#$3")
-    .replace(/(@[a-zA-Z:-]+=['"])[^'"]+(['"])/g, "$1#$2")
-    .replace(/\s+/g, " ")
-    .trim();
+  return (
+    selector
+      .replace(/\[\d+\]/g, "[]")
+      // Mask volatile attribute values (like dynamic IDs or classes)
+      .replace(/(=['"])[^'"]+(\d+)[^'"]*(['"])/g, "$1#$3")
+      .replace(/(@[a-zA-Z:-]+=['"])[^'"]+(['"])/g, "$1#$2")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 function normalizeText(value: string): string {
@@ -133,4 +145,3 @@ export function shapeUrl(url: string): string {
     return url;
   }
 }
-

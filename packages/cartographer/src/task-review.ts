@@ -12,6 +12,7 @@ import type {
   TaskPromotionReviewArtifacts,
   TaskPromotionReviewRequest,
 } from "./contracts.js";
+import { compileTaskAcquisitionReview } from "./acquisition-review-compiler.js";
 import { findDuplicateCandidates } from "./duplicate-candidates.js";
 import { ensureDir, writeJsonFile } from "./fs-json.js";
 import { createFallbackPromotionSummary } from "./fallback-summary.js";
@@ -79,8 +80,15 @@ export async function createTaskPromotionReviewArtifacts(input: {
     tapes.push(tape);
   }
 
+  const acquisition = await compileTaskAcquisitionReview({
+    domain: input.domain,
+    task,
+    taskId: input.taskId,
+    existingCommands,
+    tapes,
+  });
   const fallbackItems = tapes.map((tape) =>
-    taskFallbackReviewItem(tape, existingCommands),
+    taskFallbackReviewItem(tape, existingCommands, acquisition),
   );
   const request: TaskPromotionReviewRequest = {
     schemaVersion: 1,
@@ -102,6 +110,7 @@ export async function createTaskPromotionReviewArtifacts(input: {
     reviewPath: taskPromotionReviewPath(input.domain, input.taskId),
     existingCommands,
     fallbacks: fallbackItems,
+    acquisition,
     policy: {
       name: "v1",
       hardRules: PROMOTION_POLICY_HARD_RULES,
@@ -144,6 +153,7 @@ export async function createTaskPromotionReviewArtifacts(input: {
 function taskFallbackReviewItem(
   tape: FallbackTape,
   existingCommands: ProcessTapeSummary[],
+  acquisition: TaskPromotionReviewRequest["acquisition"],
 ): TaskPromotionReviewRequest["fallbacks"][number] {
   const evidencePreview = tape.evidence.map((evidence) => ({
     kind: evidence.kind,
@@ -166,6 +176,9 @@ function taskFallbackReviewItem(
     reviewPath: fallbackReviewPath(tape.domain, tape.id),
     duplicateCandidates: findDuplicateCandidates(tape, existingCommands),
     riskFlags: summary.mechanicalHints.riskFlags,
+    acquisition: acquisition?.fallbacks.find(
+      (fallback) => fallback.fallbackTapeId === tape.id,
+    ),
   };
 }
 
@@ -202,13 +215,62 @@ function renderTaskReview(request: TaskPromotionReviewRequest): string {
     "",
   ];
 
+  if (request.acquisition) {
+    lines.push("## Acquisition Scorecard");
+    lines.push("");
+    lines.push(
+      `- Quality: ${request.acquisition.scorecard.acquisitionQuality}`,
+    );
+    lines.push(
+      `- Candidate coverage: ${request.acquisition.scorecard.candidateCoverage}`,
+    );
+    lines.push(
+      `- Promoted segments: ${request.acquisition.scorecard.promotedCount}`,
+    );
+    lines.push(
+      `- Rejected segments: ${request.acquisition.scorecard.rejectedCount}`,
+    );
+    lines.push(
+      `- Data used without output obligations: ${request.acquisition.scorecard.dataUsedWithoutOutputCount}`,
+    );
+    lines.push(
+      `- Weak write/rerecord candidates: ${request.acquisition.scorecard.writeCandidatesRejectedOrWeakCount}`,
+    );
+    lines.push(`- Reasoning: ${request.acquisition.scorecard.reasoning}`);
+    lines.push("");
+
+    if (request.acquisition.obligations.length) {
+      lines.push("## Acquisition Obligations");
+      lines.push("");
+      for (const obligation of request.acquisition.obligations) {
+        lines.push(`### ${obligation.id}`);
+        lines.push(`- Severity: ${obligation.severity}`);
+        lines.push(`- Code: ${obligation.code}`);
+        lines.push(`- Required disposition: ${obligation.requiredDisposition}`);
+        lines.push(
+          `- Related candidates: ${obligation.relatedCandidateIds.join(", ") || "none"}`,
+        );
+        lines.push(`- Message: ${obligation.message}`);
+        if (obligation.evidencePaths.length) {
+          lines.push("- Evidence:");
+          for (const evidencePath of obligation.evidencePaths.slice(0, 8)) {
+            lines.push(`  - ${evidencePath}`);
+          }
+        }
+        lines.push("");
+      }
+    }
+  }
+
   for (const fallback of request.fallbacks) {
     lines.push(`## Fallback: ${fallback.fallbackTapeId}`);
     lines.push(`- Intent: ${fallback.intent}`);
     lines.push(`- Writes: ${String(fallback.writesToPlatform)}`);
     lines.push(`- Risk: ${fallback.riskFlags.join(", ") || "none"}`);
     lines.push(`- Review JSON: ${fallback.reviewRequestPath}`);
-    lines.push(`- Deep review: [${fallback.fallbackTapeId}](${fallback.reviewPath})`);
+    lines.push(
+      `- Deep review: [${fallback.fallbackTapeId}](${fallback.reviewPath})`,
+    );
     if (fallback.duplicateCandidates.length) {
       lines.push(
         `- Duplicate candidates: ${fallback.duplicateCandidates
@@ -222,7 +284,22 @@ function renderTaskReview(request: TaskPromotionReviewRequest): string {
     lines.push(renderCompactCandidateTable(fallback, existingCommandNames));
     lines.push("");
 
+    if (fallback.acquisition?.candidates.length) {
+      lines.push("### Acquisition Candidates");
+      lines.push(renderAcquisitionCandidateTable(fallback));
+      lines.push("");
+    }
+
     lines.push("### Candidate Details");
+    if (fallback.acquisition?.obligations.length) {
+      lines.push("#### Acquisition obligations");
+      for (const obligation of fallback.acquisition.obligations) {
+        lines.push(
+          `- ${obligation.severity} ${obligation.code}: ${obligation.message}`,
+        );
+      }
+      lines.push("");
+    }
     for (const slice of fallback.candidateSlices) {
       lines.push(renderCandidateDetails(fallback, slice, existingCommandNames));
     }
@@ -260,11 +337,9 @@ function renderCompactCandidateTable(
     const readyMark = isPromotionReadySlice(slice, existingCommandNames)
       ? "ready"
       : "";
-    const risk = slice.riskFlags?.length
-      ? slice.riskFlags.join(", ")
-      : "none";
-    const evidence = slice.operationIndexes.some(
-      (idx) => Boolean(evidenceLinks(fallback.operations[idx])),
+    const risk = slice.riskFlags?.length ? slice.riskFlags.join(", ") : "none";
+    const evidence = slice.operationIndexes.some((idx) =>
+      Boolean(evidenceLinks(fallback.operations[idx])),
     )
       ? "yes"
       : "no";
@@ -274,6 +349,21 @@ function renderCompactCandidateTable(
     );
   }
 
+  return lines.join("\n");
+}
+
+function renderAcquisitionCandidateTable(
+  fallback: TaskPromotionReviewRequest["fallbacks"][number],
+): string {
+  const lines = [
+    "| Candidate | Kind | Harness Easy | Suggested Command | Required Agent Rating | Risk | Evidence |",
+    "|---|---|---|---|---|---|---|",
+  ];
+  for (const candidate of fallback.acquisition?.candidates || []) {
+    lines.push(
+      `| ${candidate.id} | ${candidate.kind} | ${candidate.harnessEasyToPromote} | ${candidate.suggestedCommandName || "N/A"} | yes | ${tableCell(candidate.riskFlags.join(", ") || "none")} | ${candidate.evidencePaths.length ? "yes" : "no"} |`,
+    );
+  }
   return lines.join("\n");
 }
 
@@ -337,8 +427,11 @@ function compactOperation(operation: IndexedFallbackOperation): string {
   const cmd = operation.command || operation.kind;
   const args = JSON.stringify(operation.commandArgs || []);
   const selector = operation.selector ? ` selector=${operation.selector}` : "";
+  const grounding = operation.writeGrounding?.writeAdjacent
+    ? ` writeGrounding=${operation.writeGrounding.promotionReady ? "ready" : "rerecord"}`
+    : "";
   const surface = operation.surface ? ` [${operation.surface}]` : "";
-  return `${cmd} ${args}${selector}${surface}`;
+  return `${cmd} ${args}${selector}${grounding}${surface}`;
 }
 
 function evidenceLinks(operation: IndexedFallbackOperation): string {
@@ -356,6 +449,14 @@ function evidenceLinks(operation: IndexedFallbackOperation): string {
     }
     if (operation.evidencePaths["target"]) {
       parts.push(`target=${operation.evidencePaths["target"]}`);
+    }
+    if (operation.evidencePaths["writeGrounding"]) {
+      parts.push(`writeGrounding=${operation.evidencePaths["writeGrounding"]}`);
+    }
+    if (operation.evidencePaths["actionDiscovery"]) {
+      parts.push(
+        `actionDiscovery=${operation.evidencePaths["actionDiscovery"]}`,
+      );
     }
     if (operation.evidencePaths["refs"]) {
       parts.push(`refs=${operation.evidencePaths["refs"]}`);
@@ -380,9 +481,7 @@ function evidenceLinksForSliceOperation(
 ): string {
   const operation = fallback.operations[operationIndex];
   if (!operation) return "";
-  const parts = evidenceLinks(operation)
-    .split(", ")
-    .filter(Boolean);
+  const parts = evidenceLinks(operation).split(", ").filter(Boolean);
   const snapshot = nearestSnapshotEvidence(fallback.operations, operationIndex);
   if (snapshot?.evidencePaths?.refs) {
     parts.push(`contextRefs=${snapshot.evidencePaths.refs}`);
@@ -423,9 +522,10 @@ function keySelectorsForSlice(
     if (op.selector) {
       let line = `op ${idx} selector: ${op.selector}`;
       if (op.selectorCandidates?.length) {
-        const top = op.selectorCandidates.slice(0, 3).map((c) => 
-          `${c.stability} ${c.selectorKind} ${c.selector}`
-        ).join("; ");
+        const top = op.selectorCandidates
+          .slice(0, 3)
+          .map((c) => `${c.stability} ${c.selectorKind} ${c.selector}`)
+          .join("; ");
         line += ` (candidates: ${top})`;
       }
       if (op.evidenceSummary?.warnings.length) {
